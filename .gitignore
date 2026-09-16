@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment and logs
+.env
+.env.local
+*.log
+
+# SSL certificates and private keys (DO NOT COMMIT SENSITIVE CERTIFICATES)
+ssl/*.pem
+ssl/*.key
+ssl/*.crt
+ssl/*.pfx
+!ssl/.gitkeep
+
+# Data directory (preserve example config template only)
+data/config.json
+data/*.bak*
+!data/config.example.json
+!data/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db

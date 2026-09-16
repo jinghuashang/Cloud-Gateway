@@ -1,0 +1,318 @@
+{
+  "siteTitle": "Cloud Gateway",
+  "siteSubtitle": "统一云聚合门户与高性能子路径反向代理",
+  "backgroundUrl": "",
+  "themeColor": "#3b82f6",
+  "adminPasswordHash": "$2a$10$ImJfKVA0ZweONqTDLUJrC.pHwTcViCE.H89D/2msx5auOMTVMGfN.",
+  "jwtSecret": "cloud_gateway_secret_change_me_to_a_random_string",
+  "categories": [
+    "全部",
+    "常用服务",
+    "媒体影音",
+    "系统运维",
+    "开发工具"
+  ],
+  "routes": [
+    {
+      "id": "example-am",
+      "name": "NapCat 管理控制台",
+      "category": "系统运维",
+      "icon": "bot",
+      "description": "NapCat QQ 机器人核心服务与 OneBot 协议端管理",
+      "subpath": "/am",
+      "target": "http://127.0.0.1:6099",
+      "enabled": true,
+      "order": 1,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_mu24qgu2p2f6",
+      "name": "qBittorrent 下载",
+      "category": "常用服务",
+      "icon": "download",
+      "description": "BT/PT 离线高速下载与做种管理平台",
+      "subpath": "/qb",
+      "target": "http://127.0.0.1:8181",
+      "enabled": true,
+      "order": 2,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_mu24qgu6azgp",
+      "name": "AstrBot 仪表盘",
+      "category": "常用服务",
+      "icon": "sparkles",
+      "description": "大语言模型智能对话、多 Agent 与 QQ 机器人统一控制台",
+      "subpath": "/ali",
+      "target": "http://127.0.0.1:6185",
+      "enabled": true,
+      "order": 3,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_ani",
+      "name": "Ani-RSS 自动追番",
+      "category": "媒体影音",
+      "icon": "tv",
+      "description": "番剧订阅、自动下载与字幕流转中心",
+      "subpath": "/ani",
+      "target": "http://127.0.0.1:7789",
+      "enabled": true,
+      "order": 4,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_live",
+      "name": "SyncTV 同步观影",
+      "category": "媒体影音",
+      "icon": "film",
+      "description": "多人异地同步观影与弹幕直播协同播放室",
+      "subpath": "/live",
+      "target": "https://127.0.0.1:18081",
+      "enabled": true,
+      "order": 5,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_v2",
+      "name": "v2rayA 代理管理",
+      "category": "系统运维",
+      "icon": "network",
+      "description": "网络代理节点管理、透明代理与分流控制台",
+      "subpath": "/v2",
+      "target": "http://127.0.0.1:2017",
+      "enabled": true,
+      "order": 6,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_mu2d0t4w8asb",
+      "name": "Entari WebUI",
+      "category": "常用服务",
+      "icon": "bot-message-square",
+      "description": "一个基于 Satori 协议的灵活、高效的 IM framework",
+      "subpath": "/en",
+      "target": "http://127.0.0.1:8120",
+      "enabled": true,
+      "order": 7,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_alist",
+      "name": "Alist 聚合存储 (屑殇云)",
+      "category": "常用服务",
+      "icon": "hard-drive",
+      "description": "多网盘挂载、不限速直链下载与影音在线点播中心",
+      "subpath": "/alist",
+      "target": "http://127.0.0.1:5244",
+      "enabled": true,
+      "order": 8,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_newapi",
+      "name": "New API 接口分发",
+      "category": "开发工具",
+      "icon": "sparkles",
+      "description": "多模型统一聚合、跨协议转换与 API 分发中心",
+      "subpath": "/newapi",
+      "target": "http://127.0.0.1:3005",
+      "enabled": true,
+      "order": 9,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_e5",
+      "name": "E5 自动续订平台",
+      "category": "开发工具",
+      "icon": "refresh-cw",
+      "description": "Microsoft 365 E5 开发者 API 调用与自动续期管理",
+      "subpath": "/e5",
+      "target": "http://127.0.0.1:1066",
+      "enabled": true,
+      "order": 10,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_frp",
+      "name": "FRP 穿透控制台",
+      "category": "系统运维",
+      "icon": "terminal",
+      "description": "内网穿透隧道状态监控、流量统计与客户端仪表盘",
+      "subpath": "/frp",
+      "target": "http://127.0.0.1:7401",
+      "enabled": true,
+      "order": 11,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_mu2se1p5jbfb",
+      "name": "Umami 数据统计",
+      "category": "系统运维",
+      "icon": "unplug",
+      "description": "Google Analytics 的简单、快速、注重隐私的替代方案",
+      "subpath": "/um",
+      "target": "http://127.0.0.1:3058",
+      "enabled": true,
+      "order": 12,
+      "options": {
+        "autoSlash": true,
+        "injectBase": false,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true,
+        "autoPrefixSubpath": true
+      }
+    },
+    {
+      "id": "route_kuma",
+      "name": "Uptime Kuma 服务监控",
+      "category": "系统运维",
+      "icon": "activity",
+      "description": "自托管的服务可用性监控与状态面板",
+      "subpath": "/kuma",
+      "target": "http://127.0.0.1:3077",
+      "enabled": true,
+      "order": 13,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_orp",
+      "name": "OpenRouter 免费模型池",
+      "category": "开发工具",
+      "icon": "cpu",
+      "description": "OpenRouter 免费模型多密钥负载均衡与高可用分发池",
+      "subpath": "/orp",
+      "target": "http://127.0.0.1:3002",
+      "enabled": true,
+      "order": 14,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    },
+    {
+      "id": "route_omp",
+      "name": "Oh My Pi WebUI",
+      "category": "开发工具",
+      "icon": "terminal",
+      "description": "自主编码智能体 Oh My Pi 官方 Web 控制台与交互终端",
+      "subpath": "/omp",
+      "target": "http://127.0.0.1:8172",
+      "enabled": true,
+      "order": 15,
+      "options": {
+        "autoSlash": true,
+        "injectBase": true,
+        "rewriteHtml": true,
+        "rewriteLocation": true,
+        "rewriteCookie": false,
+        "ws": true,
+        "changeOrigin": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Cloud Gateway - 生产级统一二级目录反代网关与聚合门户</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230a0a0a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='20' height='14' x='2' y='5' rx='2'/><path d='M2 10h20'/></svg>">
+
+  <!-- 引入标准 Geist 字体 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Geist', 'system-ui', '-apple-system', 'BlinkMacSystemFont', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei UI"', '"Microsoft YaHei"', 'sans-serif'],
+            mono: ['Geist Mono', 'ui-monospace', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+          },
+          colors: {
+            zinc: {
+              50: '#fafafa',
+              100: '#f4f4f5',
+              200: '#e4e4e7',
+              300: '#d4d4d8',
+              400: '#a1a1aa',
+              500: '#71717a',
+              600: '#52525b',
+              700: '#3f3f46',
+              800: '#27272a',
+              900: '#18181b',
+              950: '#09090b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* 全局排版与文字抗锯齿 (完全对齐参考网站渲染质感) */
+    html {
+      scroll-behavior: smooth;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+    body {
+      color: #09090b;
+    }
+    .dark body {
+      color: #fafafa;
+    }
+
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(161, 161, 170, 0.35);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(161, 161, 170, 0.6);
+    }
+
+    /* 参考网站极简微浮雕 */
+    .tqq-card {
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .tqq-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.06), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+    }
+    .dark .tqq-card:hover {
+      box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.12);
+    }
+
+    /* 贝塞尔流线动画 */
+    @keyframes drawPath {
+      from { stroke-dashoffset: 1000; }
+      to { stroke-dashoffset: 0; }
+    }
+    .animate-trend {
+      stroke-dasharray: 1000;
+      animation: drawPath 1.8s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="bg-white dark:bg-[#09090b] text-[#09090b] dark:text-[#fafafa] min-h-screen transition-colors duration-150 antialiased font-sans flex flex-col selection:bg-zinc-200 dark:selection:bg-zinc-800">
+
+  <!-- ======================= 顶部导航栏 (全自适应，移动端与桌面端零挤压) ======================= -->
+  <header class="sticky top-0 z-40 w-full backdrop-blur-md bg-white/85 dark:bg-[#09090b]/85 border-b border-zinc-200/80 dark:border-zinc-800/80 px-4 sm:px-8 lg:px-12 xl:px-16 transition-colors">
+    <div class="w-full h-16 flex items-center justify-between gap-3">
+      
+      <!-- 左侧：品牌 Logo 与名称 -->
+      <a href="/" class="flex items-center gap-2.5 group shrink-0">
+        <div class="w-8 h-8 rounded-lg bg-[#09090b] dark:bg-[#fafafa] flex items-center justify-center text-white dark:text-[#09090b] shadow-sm">
+          <i data-lucide="cloud" class="w-4 h-4"></i>
+        </div>
+        <span id="navSiteTitle" class="text-sm font-semibold tracking-tight text-[#09090b] dark:text-[#fafafa]">
+          Cloud Gateway
+        </span>
+      </a>
+
+      <!-- 右侧：搜索框、明暗模式切换、管理员登录按钮 -->
+      <div class="flex items-center gap-2 sm:gap-2.5">
+        <!-- 搜索输入框 (移动端收缩，桌面端适度展示) -->
+        <div class="relative hidden md:block w-48 lg:w-60">
+          <i data-lucide="search" class="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2"></i>
+          <input type="text" id="searchInput" placeholder="搜索服务或前缀..." 
+            class="w-full pl-8 pr-3 py-1.5 bg-zinc-100 dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 rounded-lg text-xs text-[#09090b] dark:text-[#fafafa] placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-zinc-100 focus:border-zinc-900 dark:focus:border-zinc-100 transition-all">
+        </div>
+
+        <!-- 亮色/深色切换 -->
+        <button onclick="toggleTheme()" class="p-2 rounded-lg text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors" title="切换显示模式">
+          <i id="themeIcon" data-lucide="moon" class="w-4 h-4"></i>
+        </button>
+
+        <!-- 管理员登录按钮 -->
+        <button id="navAdminBtn" onclick="handleAdminBtnClick()" 
+          class="inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 rounded-lg shadow-sm transition-all cursor-pointer whitespace-nowrap">
+          <i data-lucide="user" class="w-3.5 h-3.5"></i>
+          <span id="navAdminBtnText">登录控制台</span>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ======================= 核心工作区 (通栏全屏铺满，文字排版完全参考原版) ======================= -->
+  <main class="w-full px-4 sm:px-8 lg:px-12 xl:px-16 py-6 sm:py-8 lg:py-10 space-y-8 sm:space-y-10 flex-1">
+    
+    <!-- 上半区：参考青桔原版布局与文字色彩 -->
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(380px,1fr)] items-start">
+      
+      <!-- 左栏：徽章、统一粗黑大标题、中度灰描述、CTA 按钮、4 宫格指标、快捷直达条 -->
+      <div class="space-y-4 sm:space-y-5">
+        
+        <!-- 徽章小标签 -->
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 text-xs font-medium text-[#09090b] dark:text-[#fafafa]">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          生产级统一二级目录反代网关已就绪
+        </div>
+
+        <!-- 纯正参考网站 H1：全局统一 700 纯墨黑，字形间距行高 100% 对齐原版 -->
+        <h1 class="text-2xl sm:text-4xl lg:text-[44px] font-bold tracking-tight text-[#09090b] dark:text-[#fafafa] leading-snug sm:leading-tight">
+          <span>稳定提供 二级目录服务网关</span>
+          <span class="block mt-1.5 sm:mt-2 lg:mt-2.5">清晰、稳定、防跑偏</span>
+        </h1>
+
+        <!-- 统一中度灰描述文本 (#71717a，完全对齐原版) -->
+        <p id="heroSubtitle" class="text-xs sm:text-sm text-[#71717a] dark:text-[#a1a1aa] leading-[24px] sm:leading-[26px] max-w-2xl">
+          Cloud Gateway 提供统一的前缀反代网关、路由基准自动注入、静态素材动态防跑偏与真实访客 IP 透传，让 Docker 容器与私有云应用集成更稳健、访问更统一。
+        </p>
+
+        <!-- CTA 按钮组 -->
+        <div class="flex flex-wrap items-center gap-2.5 pt-0.5">
+          <a href="#services-section" 
+            class="inline-flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 rounded-xl shadow-sm transition-all group">
+            <span>浏览服务列表</span>
+            <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-0.5 transition-transform"></i>
+          </a>
+          <button onclick="handleAdminBtnClick()" 
+            class="inline-flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-[#09090b] dark:text-[#fafafa] bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-850 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm transition-all">
+            <i data-lucide="sliders" class="w-4 h-4"></i>
+            <span>配置新代理项目</span>
+          </button>
+        </div>
+
+        <!-- 4 宫格指标卡片条 (数字纯黑统一，label 统一中度灰 #71717a) -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 pt-2">
+          <div class="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm">
+            <div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] font-medium">已收录服务</div>
+            <div id="statTotal" class="text-xl sm:text-2xl font-bold font-mono text-[#09090b] dark:text-[#fafafa] mt-1">8</div>
+          </div>
+          <div class="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm">
+            <div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] font-medium">路由可用率</div>
+            <div class="text-xl sm:text-2xl font-bold font-mono text-[#09090b] dark:text-[#fafafa] mt-1">100%</div>
+          </div>
+          <div class="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm">
+            <div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] font-medium">真实 IP 透传</div>
+            <div class="text-xl sm:text-2xl font-bold font-mono text-[#09090b] dark:text-[#fafafa] mt-1">Active</div>
+          </div>
+          <div class="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm">
+            <div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] font-medium">防跑偏保护</div>
+            <div class="text-xl sm:text-2xl font-bold font-mono text-[#09090b] dark:text-[#fafafa] mt-1">v2 Ready</div>
+          </div>
+        </div>
+
+        <!-- 快捷服务直达标签栏 (统一黑灰配比) -->
+        <div class="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-[#09090b] dark:text-[#fafafa]">快捷服务直达</span>
+            <span class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">点击新标签页秒开</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5 sm:gap-2" id="quickTagsContainer">
+            <!-- 动态渲染快捷标签 -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 右栏：流量调度趋势大卡片 + 快速接入卡片 -->
+      <div class="space-y-3">
+        <div class="p-4 sm:p-6 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm relative overflow-hidden">
+          
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <h3 class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa] tracking-tight">网关调度态势概览</h3>
+              <p class="text-[11px] sm:text-xs text-[#71717a] dark:text-[#a1a1aa] mt-0.5">全链路真实流量分发与微秒级响应统计</p>
+            </div>
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] border border-zinc-200 dark:border-zinc-700 shrink-0">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span id="realtimeLiveTag">实时监控 · 540 req/s</span>
+            </span>
+          </div>
+
+          <!-- 精致平滑 SVG 曲线图 (纯动态实时渲染，告别硬编码日期与数值) -->
+          <div class="pt-3 pb-1" id="trafficChartBox">
+            <svg id="trafficSvg" viewBox="0 0 500 175" class="w-full h-36 sm:h-40 overflow-visible transition-all duration-500">
+              <defs>
+                <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#0284c7" stop-opacity="0.22"/>
+                  <stop offset="100%" stop-color="#0284c7" stop-opacity="0.0"/>
+                </linearGradient>
+              </defs>
+              <line x1="0" y1="30" x2="500" y2="30" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
+              <line x1="0" y1="80" x2="500" y2="80" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
+              <line x1="0" y1="130" x2="500" y2="130" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
+
+              <!-- 动态 SVG 曲线与高亮点内容容器 -->
+              <g id="dynamicSvgCurve"></g>
+            </svg>
+
+            <!-- 动态日期行 (根据真实当前时间动态呈现最近 7 天) -->
+            <div id="trafficDatesRow" class="flex items-center justify-between text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa] mt-2">
+            </div>
+          </div>
+        </div>
+
+        <!-- 快速接入卡片 -->
+        <div class="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm flex items-center justify-between gap-3">
+          <div>
+            <h4 class="text-xs font-semibold text-[#09090b] dark:text-[#fafafa]">准备好接入新服务？</h4>
+            <p class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] mt-0.5">从控制台一键录入，自动补全斜杠并隔离资源。</p>
+          </div>
+          <button onclick="handleAdminBtnClick()" class="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
+            <span>进入后台</span>
+            <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ======================= 下半区：服务矩阵大厅 ======================= -->
+    <div id="services-section" class="w-full space-y-5 pt-6 border-t border-zinc-200/80 dark:border-zinc-800/80">
+      
+      <!-- 标题栏与分类筛选胶囊 -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+        <div>
+          <h2 class="text-base sm:text-lg font-bold tracking-tight text-[#09090b] dark:text-[#fafafa] flex items-center gap-2">
+            <span>收录服务矩阵</span>
+            <span id="serviceBadgeCount" class="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-[#71717a] dark:text-[#a1a1aa]">8 个项目</span>
+          </h2>
+          <p class="text-xs text-[#71717a] dark:text-[#a1a1aa] mt-0.5">所有服务均严格代理至对应二级目录，并在新标签页中打开</p>
+        </div>
+
+        <!-- 分类 Tab 切换栏 -->
+        <div class="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar" id="categoryContainer">
+          <!-- 动态分类按钮 -->
+        </div>
+      </div>
+
+      <!-- 全屏卡片网格列表 (自适应大屏 5 列，手机单列，平板多列) -->
+      <div id="servicesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3.5 sm:gap-4">
+        <!-- 动态填充卡片 -->
+      </div>
+
+      <!-- 空状态 -->
+      <div id="emptyState" class="hidden flex-col items-center justify-center py-16 text-center">
+        <div class="w-10 h-10 rounded-xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-zinc-400 mb-2.5">
+          <i data-lucide="inbox" class="w-5 h-5"></i>
+        </div>
+        <p class="text-xs font-medium text-[#71717a] dark:text-[#a1a1aa]">该分类下暂无收录项目，可在超管后台随时添加</p>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ======================= 页脚 (全自适应，手机端竖向规整排布，桌面端横向对齐) ======================= -->
+  <footer class="border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#09090b] py-5 px-4 sm:px-8 lg:px-12 xl:px-16 transition-colors">
+    <div class="w-full flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#71717a] dark:text-[#a1a1aa] text-center sm:text-left">
+      <div class="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+        <div class="w-5 h-5 rounded-md bg-[#09090b] dark:bg-[#fafafa] flex items-center justify-center text-white dark:text-[#09090b] text-[10px] font-bold">CG</div>
+        <span class="font-semibold text-[#09090b] dark:text-[#fafafa]">Cloud Gateway</span>
+        <span class="text-zinc-300 dark:text-zinc-700 hidden sm:inline">|</span>
+        <span class="text-[#71717a] dark:text-[#a1a1aa]">生产级统一二级目录反代网关与聚合门户</span>
+      </div>
+      <div class="flex flex-wrap items-center justify-center gap-3">
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span>双模自适应与 Proxy Protocol 运行中</span>
+        </div>
+        <span>© 2026 Cloud Gateway</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ======================= 管理员登录模态框 (完全自适应手机端) ======================= -->
+  <div id="loginModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-sm p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl transform scale-95 transition-transform duration-150" id="loginModalBox">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+        <h3 class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa] flex items-center gap-2">
+          <i data-lucide="lock" class="w-4 h-4 text-[#09090b] dark:text-[#fafafa]"></i>
+          管理员验证
+        </h3>
+        <button onclick="closeLoginModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form onsubmit="handleLoginSubmit(event)" class="mt-4 space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1.5">控制台访问密码</label>
+          <input type="password" id="adminPasswordInput" required placeholder="输入管理员密码" 
+            class="w-full px-3.5 py-2 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl text-xs text-[#09090b] dark:text-[#fafafa] placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-zinc-100 focus:border-zinc-900 dark:focus:border-zinc-100">
+          <p id="loginErrorTip" class="hidden text-xs text-rose-500 mt-1.5 flex items-center gap-1">
+            <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
+            <span>密码错误，请重新输入</span>
+          </p>
+        </div>
+        <div class="pt-1 flex items-center gap-2.5">
+          <button type="button" onclick="closeLoginModal()" class="flex-1 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-[#71717a] dark:text-[#a1a1aa] hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+            取消
+          </button>
+          <button type="submit" class="flex-1 py-2 rounded-xl bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-xs font-semibold text-white shadow-sm transition-all">
+            登录
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ======================= 管理控制台抽屉面板 (彻底解决移动端重叠，自适应卡片/表格) ======================= -->
+  <div id="adminPanel" class="fixed inset-0 z-50 flex flex-col bg-white dark:bg-[#09090b] backdrop-blur-xl hidden opacity-0 transition-opacity duration-150 overflow-y-auto">
+    
+    <!-- 控制台顶栏：移动端换行自适应排布，桌面端横向对齐，决不再文字挤压折断！ -->
+    <header class="sticky top-0 z-20 border-b border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-[#09090b]/95 px-4 sm:px-8 py-3.5 transition-colors">
+      <div class="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        
+        <!-- 第一行/左侧：Logo 与标题与关闭按钮 (移动端右上角放关闭) -->
+        <div class="flex items-center justify-between sm:justify-start gap-3 w-full sm:w-auto">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-[#09090b] dark:bg-[#fafafa] text-white dark:text-[#09090b] flex items-center justify-center shrink-0">
+              <i data-lucide="sliders" class="w-3.5 h-3.5"></i>
+            </div>
+            <div>
+              <h2 class="text-xs sm:text-sm font-semibold text-[#09090b] dark:text-[#fafafa] flex items-center gap-1.5">
+                <span>网关控制中心</span>
+                <span class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-zinc-100 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] border border-zinc-200 dark:border-zinc-700">已认证</span>
+              </h2>
+              <p class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] hidden sm:block">动态配置二级目录路由、目标端口与防素材跑偏规则</p>
+            </div>
+          </div>
+
+          <!-- 仅移动端展示的关闭按钮 -->
+          <button onclick="closeAdminPanel()" class="sm:hidden p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-lg">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+        <!-- 第二行/右侧：操作按钮组 (移动端自适应平铺，桌面端靠右并排) -->
+        <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+          <button onclick="openRouteEditModal()" class="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 rounded-lg shadow-sm transition-all whitespace-nowrap">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            <span>新增路由</span>
+          </button>
+          <button onclick="openSettingsModal()" class="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium text-[#09090b] dark:text-[#fafafa] bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 transition-all whitespace-nowrap">
+            <i data-lucide="settings" class="w-3.5 h-3.5"></i>
+            <span>全局设置</span>
+          </button>
+          <button onclick="handleLogout()" class="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium text-rose-600 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-lg transition-all whitespace-nowrap">
+            <i data-lucide="log-out" class="w-3.5 h-3.5"></i>
+            <span>退出</span>
+          </button>
+          <button onclick="closeAdminPanel()" class="hidden sm:inline-flex p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-lg">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+      </div>
+    </header>
+
+    <!-- 控制台主体内容 -->
+    <div class="w-full px-4 sm:px-8 py-5 sm:py-6 space-y-4">
+      
+      <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-sm">
+        
+        <div class="px-4 sm:px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50/50 dark:bg-zinc-850">
+          <span class="text-xs font-semibold text-[#09090b] dark:text-[#fafafa]">当前活跃代理路由列表</span>
+          <span class="text-[10px] sm:text-[11px] text-[#71717a]">修改后内存热生效</span>
+        </div>
+
+        <!-- 1. 桌面端表格视图 (屏幕 >= md 时展示) -->
+        <div class="hidden md:block overflow-x-auto">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr class="border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/30 dark:bg-zinc-900 text-[#71717a] text-[11px]">
+                <th class="py-3 px-6 font-medium">服务名称</th>
+                <th class="py-3 px-4 font-medium">二级目录 (Subpath)</th>
+                <th class="py-3 px-4 font-medium">目标后端 (Target)</th>
+                <th class="py-3 px-4 font-medium text-center">状态</th>
+                <th class="py-3 px-6 font-medium text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="adminTableBody" class="divide-y divide-zinc-100 dark:divide-zinc-800">
+              <!-- 动态填充 -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 2. 移动端卡片式流视图 (屏幕 < md 时展示，彻底消灭文字挤压重叠！) -->
+        <div id="adminMobileList" class="md:hidden divide-y divide-zinc-100 dark:divide-zinc-800 p-2 space-y-2">
+          <!-- 动态填充移动端精致卡片 -->
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= 路由添加/编辑模态框 (自适应小屏) ======================= -->
+  <div id="routeModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-lg p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+        <h3 id="routeModalTitle" class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa]">添加代理服务</h3>
+        <button onclick="closeRouteEditModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form onsubmit="handleRouteFormSubmit(event)" class="mt-4 space-y-3.5 text-xs">
+        <input type="hidden" id="formRouteId">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">服务名称 *</label>
+            <input type="text" id="formName" required placeholder="如: NapCat 控制台" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">所属分类</label>
+            <input type="text" id="formCategory" placeholder="如: 常用服务" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">二级目录 * (如: /am)</label>
+            <input type="text" id="formSubpath" required placeholder="/am" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono text-[#09090b] dark:text-[#fafafa]">
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">目标地址 * (Target)</label>
+            <div class="flex gap-1.5">
+              <input type="text" id="formTarget" required placeholder="http://127.0.0.1:8080" class="flex-1 px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono text-[#09090b] dark:text-[#fafafa]">
+              <button type="button" onclick="testCurrentTarget()" class="px-2.5 py-1 bg-zinc-200 dark:bg-zinc-700 text-[#09090b] dark:text-[#fafafa] rounded-lg text-[10px] font-medium">测试</button>
+            </div>
+            <span id="targetTestResult" class="text-[10px] hidden block mt-1"></span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">图标 (Lucide 图标名)</label>
+            <input type="text" id="formIcon" placeholder="bot, tv, film, globe..." class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">排序权重</label>
+            <input type="number" id="formOrder" value="1" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">功能描述</label>
+          <textarea id="formDescription" rows="2" placeholder="简短功能描述..." class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]"></textarea>
+        </div>
+
+        <!-- 高级反代特性与自动补全二级目录控制开关 -->
+        <div class="pt-2.5 border-t border-zinc-100 dark:border-zinc-800 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="font-semibold text-[#09090b] dark:text-[#fafafa]">高级反代特性</span>
+            <span class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">自动补齐二级目录与 SPA 防脱轨</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+            <label class="flex items-start gap-2 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+              <input type="checkbox" id="formAutoPrefixSubpath" class="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-0">
+              <div>
+                <div class="font-medium text-[#09090b] dark:text-[#fafafa]">自动补全二级目录</div>
+                <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight mt-0.5">代码内裸路径自动补全 (修复 SPA/Next.js 脱轨与白屏)</div>
+              </div>
+            </label>
+            <label class="flex items-start gap-2 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+              <input type="checkbox" id="formRewriteLocation" class="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-0">
+              <div>
+                <div class="font-medium text-[#09090b] dark:text-[#fafafa]">重写重定向 Location</div>
+                <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight mt-0.5">301/302/307 标头自动补全二级目录前缀</div>
+              </div>
+            </label>
+            <label class="flex items-start gap-2 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+              <input type="checkbox" id="formRewriteHtml" class="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-0">
+              <div>
+                <div class="font-medium text-[#09090b] dark:text-[#fafafa]">重写 HTML 资源相对路径</div>
+                <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight mt-0.5">自动补全 href/src/action 相对路径</div>
+              </div>
+            </label>
+            <label class="flex items-start gap-2 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+              <input type="checkbox" id="formInjectBase" class="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-0">
+              <div>
+                <div class="font-medium text-[#09090b] dark:text-[#fafafa]">注入 Base / 路由栈垫片</div>
+                <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight mt-0.5">拦截 pushState 保持二级目录</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="pt-2 flex items-center justify-end gap-2">
+          <button type="button" onclick="closeRouteEditModal()" class="px-3.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[#71717a] dark:text-[#a1a1aa] font-medium">取消</button>
+          <button type="submit" class="px-4 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm">保存热生效</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ======================= 全局设置模态框 ======================= -->
+  <div id="settingsModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-sm p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+        <h3 class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa]">全局设置</h3>
+        <button onclick="closeSettingsModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <form onsubmit="handleSettingsSubmit(event)" class="mt-4 space-y-3 text-xs">
+        <div>
+          <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">站点主标题</label>
+          <input type="text" id="settingsSiteTitle" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+        </div>
+        <div>
+          <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">副标题介绍</label>
+          <input type="text" id="settingsSiteSubtitle" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+        </div>
+        <div>
+          <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">修改超管密码 (留空则不修改)</label>
+          <input type="password" id="settingsNewPassword" placeholder="输入至少 6 位新密码" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+        </div>
+        <div class="pt-2 flex items-center justify-end gap-2">
+          <button type="button" onclick="closeSettingsModal()" class="px-3.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[#71717a] dark:text-[#a1a1aa] font-medium">取消</button>
+          <button type="submit" class="px-4 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm">保存设置</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ======================= 核心交互脚本 ======================= -->
+  <script>
+    let publicData = { siteTitle: 'Cloud Gateway', siteSubtitle: '', categories: [], routes: [] };
+    let adminRoutes = [];
+    let currentCategory = '全部';
+    let searchQuery = '';
+    let authToken = localStorage.getItem('cloud_gateway_token') || '';
+
+    function initTheme() {
+      const isDark = localStorage.getItem('cloud_gateway_theme') === 'dark' || 
+        (!('cloud_gateway_theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+        updateThemeIcon(true);
+      } else {
+        document.documentElement.classList.remove('dark');
+        updateThemeIcon(false);
+      }
+    }
+
+    function toggleTheme() {
+      const isDark = document.documentElement.classList.toggle('dark');
+      localStorage.setItem('cloud_gateway_theme', isDark ? 'dark' : 'light');
+      updateThemeIcon(isDark);
+    }
+
+    function updateThemeIcon(isDark) {
+      const icon = document.getElementById('themeIcon');
+      if (icon) {
+        icon.setAttribute('data-lucide', isDark ? 'sun' : 'moon');
+        if (window.lucide) lucide.createIcons();
+      }
+    }
+
+    async function init() {
+      initTheme();
+      await fetchPublicInfo();
+      checkAuthStatus();
+      setupSearch();
+    }
+      // 每 5 秒轮询最新实时流量态势指标驱动曲线与 QPS 动态跳动
+      setInterval(async () => {
+        try {
+          const res = await fetch('/__gw/api/public/metrics');
+          if (res.ok) {
+            const stats = await res.json();
+            renderTrafficChart(stats);
+          }
+        } catch (e) {}
+      }, 5000);
+
+    function renderTrafficChart(stats) {
+      if (!stats || !Array.isArray(stats.points) || stats.points.length === 0) return;
+
+      // 1. 更新顶部实时监控标签
+      const liveTag = document.getElementById('realtimeLiveTag');
+      if (liveTag && stats.currentQps) {
+        liveTag.textContent = `实时监控 · ${stats.currentQps} req/s`;
+      }
+
+      // 2. 映射 7 个坐标点位 (SVG viewBox: 500 x 175)
+      const pts = stats.points;
+      const values = pts.map(p => p.value);
+      const minV = Math.min(...values);
+      const maxV = Math.max(...values);
+      const range = (maxV - minV) || 1;
+
+      // 7 点等距 X 坐标: [0, 83, 166, 250, 333, 416, 500]
+      const coords = pts.map((p, i) => {
+        const x = i === pts.length - 1 ? 500 : Math.round((i / (pts.length - 1)) * 500);
+        const y = Math.round(135 - ((p.value - minV) / range) * 105);
+        return { x, y, value: p.value, isPeak: !!p.isPeak, date: p.date, label: p.label };
+      });
+
+      // 3. 计算 Catmull-Rom 三次贝塞尔平滑曲线路径
+      let curveD = `M ${coords[0].x} ${coords[0].y}`;
+      for (let i = 0; i < coords.length - 1; i++) {
+        const p0 = coords[i === 0 ? 0 : i - 1];
+        const p1 = coords[i];
+        const p2 = coords[i + 1];
+        const p3 = coords[i + 2] || p2;
+
+        const cp1x = p1.x + (p2.x - p0.x) / 6;
+        const cp1y = p1.y + (p2.y - p0.y) / 6;
+        const cp2x = p2.x - (p3.x - p1.x) / 6;
+        const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+        curveD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+      }
+      const areaD = `${curveD} L 500 160 L 0 160 Z`;
+
+      // 4. 找到峰值点、中间参考点与最新点并彻底排查去重
+      let peakIdx = 0;
+      coords.forEach((c, idx) => {
+        if (c.value > coords[peakIdx].value) peakIdx = idx;
+      });
+      const peak = coords[peakIdx];
+      const isPeakToday = (peakIdx === coords.length - 1);
+      const lastPoint = coords[coords.length - 1];
+      const midIdx = peakIdx > 2 ? 1 : (peakIdx < 2 ? 4 : 2);
+      const midPoint = coords[midIdx];
+
+      // 5. 组装高亮标注点 SVG (首尾边界防裁剪、文字发光 Halo、杜绝同点重叠！)
+      const peakAnchor = peak.x >= 450 ? 'end' : (peak.x <= 50 ? 'start' : 'middle');
+      const peakTextX = peak.x >= 450 ? 490 : (peak.x <= 50 ? 10 : peak.x);
+      const peakTextY = Math.max(18, peak.y - 14);
+
+      let pointsSvg = `
+        <!-- 峰值发光高亮点 -->
+        <circle cx="${peak.x}" cy="${peak.y}" r="7" class="fill-blue-500/20 animate-ping" opacity="0.75"/>
+        <circle cx="${peak.x}" cy="${peak.y}" r="4.5" class="fill-white stroke-blue-600" stroke-width="2.5"/>
+        <text x="${peakTextX}" y="${peakTextY}" text-anchor="${peakAnchor}" 
+              class="text-[11px] font-mono font-bold fill-[#09090b] dark:fill-[#fafafa] select-none"
+              style="paint-order: stroke fill; stroke: var(--bg-white, #ffffff); stroke-width: 4px; stroke-linejoin: round;">${peak.value} req/s</text>
+      `;
+
+      // 若今日不是峰值点，才额外绘制今日最新点（若今日就是峰值，仅绘制一次，彻底杜绝数据重合！）
+      if (!isPeakToday) {
+        const lastAnchor = 'end';
+        const lastTextX = 490;
+        const lastTextY = Math.max(18, lastPoint.y - 12);
+        pointsSvg += `
+          <!-- 今日最新点 -->
+          <circle cx="${lastPoint.x}" cy="${lastPoint.y}" r="3.5" class="fill-white stroke-blue-600" stroke-width="2"/>
+          <text x="${lastTextX}" y="${lastTextY}" text-anchor="${lastAnchor}" 
+                class="text-[10px] font-mono font-medium fill-[#71717a] dark:fill-[#a1a1aa] select-none"
+                style="paint-order: stroke fill; stroke: var(--bg-white, #ffffff); stroke-width: 4px; stroke-linejoin: round;">${lastPoint.value}</text>
+        `;
+      }
+
+      // 中间参考点 (仅在与峰值不冲突时绘制)
+      if (midIdx !== peakIdx && midIdx !== coords.length - 1) {
+        pointsSvg += `
+          <!-- 中间参考点 -->
+          <circle cx="${midPoint.x}" cy="${midPoint.y}" r="3.5" class="fill-white stroke-blue-600" stroke-width="2"/>
+          <text x="${midPoint.x}" y="${Math.max(18, midPoint.y - 12)}" text-anchor="middle" 
+                class="text-[10px] font-mono font-medium fill-[#71717a] dark:fill-[#a1a1aa] select-none"
+                style="paint-order: stroke fill; stroke: var(--bg-white, #ffffff); stroke-width: 4px; stroke-linejoin: round;">${midPoint.value}</text>
+        `;
+      }
+
+      const svgG = document.getElementById('dynamicSvgCurve');
+      if (svgG) {
+        svgG.innerHTML = `
+          <path d="${areaD}" fill="url(#areaGradient)"/>
+          <path d="${curveD}" fill="none" stroke="#0284c7" stroke-width="2.5" stroke-linecap="round" class="animate-trend"/>
+          ${pointsSvg}
+        `;
+      }
+
+      // 6. 注入底部动态日期行 (去重冗余文案，规整展示)
+      const datesRow = document.getElementById('trafficDatesRow');
+      if (datesRow) {
+        datesRow.innerHTML = coords.map((c, i) => {
+          const isPeak = (i === peakIdx);
+          const isToday = (i === coords.length - 1);
+          if (isPeak && isToday) {
+            return `<span class="font-bold text-[#09090b] dark:text-[#fafafa]">${c.date} <span class="text-blue-600 dark:text-blue-400 font-semibold">(峰值)</span></span>`;
+          } else if (isPeak) {
+            return `<span class="font-bold text-[#09090b] dark:text-[#fafafa]">${c.date} <span class="text-blue-600 dark:text-blue-400 font-semibold">(峰值)</span></span>`;
+          } else if (isToday) {
+            return `<span class="font-bold text-[#09090b] dark:text-[#fafafa]">${c.date} <span class="text-[#71717a] dark:text-[#a1a1aa] font-normal">(今天)</span></span>`;
+          }
+          return `<span>${c.date}</span>`;
+        }).join('');
+      }
+    }
+
+    async function fetchPublicInfo() {
+      try {
+        const res = await fetch('/__gw/api/public/info');
+        publicData = await res.json();
+
+        document.getElementById('navSiteTitle').textContent = publicData.siteTitle || 'Cloud Gateway';
+        if (publicData.siteSubtitle) {
+          document.getElementById('heroSubtitle').textContent = publicData.siteSubtitle;
+        }
+        document.title = `${publicData.siteTitle || 'Cloud Gateway'} - 生产级统一二级目录反代网关与聚合门户`;
+        
+        const count = publicData.routes ? publicData.routes.length : 0;
+        document.getElementById('statTotal').textContent = count;
+        document.getElementById('serviceBadgeCount').textContent = `${count} 个项目`;
+
+        renderQuickTags();
+        renderCategories();
+        renderServiceCards();
+        if (publicData.trafficStats) {
+          renderTrafficChart(publicData.trafficStats);
+        }
+      } catch (err) {
+        console.error('Failed to fetch public info:', err);
+      }
+    }
+
+    function renderQuickTags() {
+      const container = document.getElementById('quickTagsContainer');
+      const routes = publicData.routes || [];
+
+      if (routes.length === 0) {
+        container.innerHTML = '<span class="text-xs text-[#71717a]">暂无服务</span>';
+        return;
+      }
+
+      container.innerHTML = routes.map(r => {
+        let fullUrl = r.subpath.endsWith('/') ? r.subpath : r.subpath + '/';
+        if (r.subpath === '/ali') fullUrl = '/ali/#/';
+        else if (r.subpath === '/live') fullUrl = '/live/web/';
+        else if (r.subpath === '/frp') fullUrl = '/frp/static/';
+
+        return `
+          <a href="${fullUrl}" target="_blank" rel="noopener noreferrer"
+            class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-lg text-xs font-medium bg-zinc-100 hover:bg-zinc-200/80 dark:bg-zinc-800/90 dark:hover:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] border border-zinc-200/80 dark:border-zinc-700/80 transition-colors">
+            <span class="font-semibold">${escapeHtml(r.name)}</span>
+            <span class="text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(r.subpath)}/</span>
+          </a>
+        `;
+      }).join('');
+    }
+
+    function renderCategories() {
+      const container = document.getElementById('categoryContainer');
+      const cats = ['全部', ...(publicData.categories || []).filter(c => c !== '全部')];
+
+      container.innerHTML = cats.map(cat => {
+        const active = currentCategory === cat;
+        return `
+          <button onclick="selectCategory('${cat}')" 
+            class="px-3 py-1 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
+              active 
+                ? 'bg-[#09090b] text-white dark:bg-[#fafafa] dark:text-[#09090b] shadow-sm' 
+                : 'bg-zinc-100 hover:bg-zinc-200/80 text-[#71717a] dark:bg-zinc-800 dark:hover:bg-zinc-750 dark:text-[#a1a1aa]'
+            }">
+            ${cat}
+          </button>
+        `;
+      }).join('');
+    }
+
+    function selectCategory(cat) {
+      currentCategory = cat;
+      renderCategories();
+      renderServiceCards();
+    }
+
+    function setupSearch() {
+      const input = document.getElementById('searchInput');
+      if (input) {
+        input.addEventListener('input', (e) => {
+          searchQuery = e.target.value.toLowerCase().trim();
+          renderServiceCards();
+        });
+      }
+    }
+
+    function renderServiceCards() {
+      const grid = document.getElementById('servicesGrid');
+      const empty = document.getElementById('emptyState');
+
+      let filtered = (publicData.routes || []).filter(item => {
+        const matchCat = currentCategory === '全部' || item.category === currentCategory;
+        const matchSearch = !searchQuery || 
+          (item.name && item.name.toLowerCase().includes(searchQuery)) ||
+          (item.subpath && item.subpath.toLowerCase().includes(searchQuery)) ||
+          (item.description && item.description.toLowerCase().includes(searchQuery));
+        return matchCat && matchSearch;
+      });
+
+      if (filtered.length === 0) {
+        grid.innerHTML = '';
+        empty.classList.remove('hidden');
+        empty.classList.add('flex');
+        return;
+      }
+
+      empty.classList.add('hidden');
+      empty.classList.remove('flex');
+
+      grid.innerHTML = filtered.map(item => {
+        let fullUrl = item.subpath.endsWith('/') ? item.subpath : item.subpath + '/';
+        if (item.subpath === '/ali') fullUrl = '/ali/#/';
+        else if (item.subpath === '/live') fullUrl = '/live/web/';
+        else if (item.subpath === '/frp') fullUrl = '/frp/static/';
+
+        return `
+          <a href="${fullUrl}" target="_blank" rel="noopener noreferrer" 
+            class="tqq-card group relative p-4 sm:p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm flex flex-col justify-between cursor-pointer">
+            <div>
+              <div class="flex items-start justify-between gap-3 mb-2.5 sm:mb-3">
+                <div class="w-9 h-9 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 flex items-center justify-center text-[#09090b] dark:text-[#fafafa]">
+                  ${renderIcon(item.icon)}
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] border border-zinc-200/60 dark:border-zinc-700/60">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    正常
+                  </span>
+                  <div class="w-5 h-5 rounded flex items-center justify-center text-zinc-400 group-hover:text-[#09090b] dark:group-hover:text-[#fafafa] transition-colors">
+                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2 mb-1.5">
+                <h3 class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa] truncate">
+                  ${escapeHtml(item.name)}
+                </h3>
+                <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[#71717a] dark:text-[#a1a1aa] shrink-0">
+                  ${escapeHtml(item.category)}
+                </span>
+              </div>
+
+              <p class="text-xs text-[#71717a] dark:text-[#a1a1aa] line-clamp-2 leading-relaxed mb-4">
+                ${escapeHtml(item.description || '生产级二级目录复用代理服务')}
+              </p>
+            </div>
+
+            <div class="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
+              <span class="text-[11px] font-mono font-medium px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] border border-zinc-200/60 dark:border-zinc-700/60">
+                ${escapeHtml(item.subpath)}/
+              </span>
+              <span class="text-xs font-medium text-[#71717a] group-hover:text-[#09090b] dark:text-[#a1a1aa] dark:group-hover:text-[#fafafa] flex items-center gap-0.5 transition-colors">
+                <span>进入服务</span>
+                <i data-lucide="chevron-right" class="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform"></i>
+              </span>
+            </div>
+          </a>
+        `;
+      }).join('');
+
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function renderIcon(name) {
+      if (!name) return '<i data-lucide="globe" class="w-4 h-4"></i>';
+      if (/\p{Emoji}/u.test(name)) return `<span class="text-base">${name}</span>`;
+      return `<i data-lucide="${escapeHtml(name)}" class="w-4 h-4"></i>`;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+
+    function handleAdminBtnClick() {
+      if (authToken) openAdminPanel();
+      else openLoginModal();
+    }
+
+    function openLoginModal() {
+      const modal = document.getElementById('loginModal');
+      const box = document.getElementById('loginModalBox');
+      modal.classList.remove('hidden');
+      setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        box.classList.remove('scale-95');
+        document.getElementById('adminPasswordInput').focus();
+      }, 10);
+    }
+
+    function closeLoginModal() {
+      const modal = document.getElementById('loginModal');
+      const box = document.getElementById('loginModalBox');
+      modal.classList.add('opacity-0');
+      box.classList.add('scale-95');
+      setTimeout(() => {
+        modal.classList.add('hidden');
+        document.getElementById('loginErrorTip').classList.add('hidden');
+      }, 150);
+    }
+
+    async function handleLoginSubmit(e) {
+      e.preventDefault();
+      const pwd = document.getElementById('adminPasswordInput').value;
+      const errTip = document.getElementById('loginErrorTip');
+      try {
+        const res = await fetch('/__gw/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pwd })
+        });
+        const data = await res.json();
+        if (res.ok && data.token) {
+          authToken = data.token;
+          localStorage.setItem('cloud_gateway_token', authToken);
+          closeLoginModal();
+          checkAuthStatus();
+          openAdminPanel();
+        } else {
+          errTip.classList.remove('hidden');
+        }
+      } catch (err) {
+        errTip.classList.remove('hidden');
+      }
+    }
+
+    async function checkAuthStatus() {
+      const btnText = document.getElementById('navAdminBtnText');
+      if (!authToken) {
+        btnText.textContent = '登录控制台';
+        return;
+      }
+      try {
+        const res = await fetch('/__gw/api/auth/check', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (res.ok) btnText.textContent = '控制台';
+        else handleLogout();
+      } catch (e) {
+        handleLogout();
+      }
+    }
+
+    function handleLogout() {
+      authToken = '';
+      localStorage.removeItem('cloud_gateway_token');
+      checkAuthStatus();
+      closeAdminPanel();
+    }
+
+    async function openAdminPanel() {
+      const panel = document.getElementById('adminPanel');
+      panel.classList.remove('hidden');
+      setTimeout(() => panel.classList.remove('opacity-0'), 10);
+      await fetchAdminRoutes();
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function closeAdminPanel() {
+      const panel = document.getElementById('adminPanel');
+      panel.classList.add('opacity-0');
+      setTimeout(() => panel.classList.add('hidden'), 150);
+      fetchPublicInfo();
+    }
+
+    async function fetchAdminRoutes() {
+      try {
+        const res = await fetch('/__gw/api/admin/routes', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (res.status === 401) {
+          handleLogout();
+          openLoginModal();
+          return;
+        }
+        const data = await res.json();
+        adminRoutes = data.routes || [];
+        renderAdminUI();
+      } catch (err) {
+        console.error('Failed to fetch routes:', err);
+      }
+    }
+
+    // 渲染管理界面：同时生成桌面端表格和移动端自适应卡片列表
+    function renderAdminUI() {
+      // 1. 桌面端表格
+      const tbody = document.getElementById('adminTableBody');
+      tbody.innerHTML = adminRoutes.map(r => `
+        <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-850/50 transition-colors">
+          <td class="py-3 px-6 font-medium text-[#09090b] dark:text-[#fafafa] flex items-center gap-2">
+            <div class="w-6 h-6 rounded bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[#09090b] dark:text-[#fafafa]">
+              ${renderIcon(r.icon)}
+            </div>
+            <span>${escapeHtml(r.name)}</span>
+          </td>
+          <td class="py-3 px-4 font-mono font-medium text-[#09090b] dark:text-[#fafafa]">${escapeHtml(r.subpath)}/</td>
+          <td class="py-3 px-4 font-mono text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(r.target)}</td>
+          <td class="py-3 px-4 text-center">
+            <button onclick="toggleRouteStatus('${r.id}')" class="px-2 py-0.5 rounded-full text-[10px] font-medium ${
+              r.enabled ? 'bg-zinc-100 text-[#09090b] dark:bg-zinc-800 dark:text-[#fafafa]' : 'text-zinc-400'
+            }">
+              ${r.enabled ? '● 运行中' : '○ 已停用'}
+            </button>
+          </td>
+          <td class="py-3 px-6 text-right space-x-2">
+            <a href="${r.subpath}/" target="_blank" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa] inline-block"><i data-lucide="external-link" class="w-3.5 h-3.5"></i></a>
+            <button onclick="openRouteEditModal('${r.id}')" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa]"><i data-lucide="edit" class="w-3.5 h-3.5"></i></button>
+            <button onclick="deleteRoute('${r.id}')" class="p-1 text-zinc-400 hover:text-rose-600"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+          </td>
+        </tr>
+      `).join('');
+
+      // 2. 移动端卡片视图 (彻底杜绝文字竖排挤压！)
+      const mobileList = document.getElementById('adminMobileList');
+      mobileList.innerHTML = adminRoutes.map(r => `
+        <div class="p-3.5 rounded-xl bg-zinc-50/60 dark:bg-zinc-850/60 border border-zinc-200/60 dark:border-zinc-800 space-y-2.5">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="w-6 h-6 rounded bg-zinc-200/80 dark:bg-zinc-800 flex items-center justify-center text-[#09090b] dark:text-[#fafafa] shrink-0">
+                ${renderIcon(r.icon)}
+              </div>
+              <span class="font-semibold text-xs text-[#09090b] dark:text-[#fafafa] truncate">${escapeHtml(r.name)}</span>
+            </div>
+            <button onclick="toggleRouteStatus('${r.id}')" class="px-2 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${
+              r.enabled ? 'bg-zinc-200 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa]' : 'text-zinc-400'
+            }">
+              ${r.enabled ? '● 运行中' : '○ 已停用'}
+            </button>
+          </div>
+
+          <div class="flex items-center justify-between text-xs font-mono text-[11px] gap-2">
+            <span class="px-1.5 py-0.5 rounded bg-zinc-200/80 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] font-bold">${escapeHtml(r.subpath)}/</span>
+            <span class="text-[#71717a] dark:text-[#a1a1aa] truncate">${escapeHtml(r.target)}</span>
+          </div>
+
+          <div class="pt-2 border-t border-zinc-200/50 dark:border-zinc-800 flex items-center justify-end gap-3 text-xs">
+            <a href="${r.subpath}/" target="_blank" class="inline-flex items-center gap-1 text-[#09090b] dark:text-[#fafafa] font-medium">
+              <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+              <span>访问</span>
+            </a>
+            <button onclick="openRouteEditModal('${r.id}')" class="inline-flex items-center gap-1 text-zinc-600 dark:text-zinc-300 font-medium">
+              <i data-lucide="edit" class="w-3.5 h-3.5"></i>
+              <span>编辑</span>
+            </button>
+            <button onclick="deleteRoute('${r.id}')" class="inline-flex items-center gap-1 text-rose-600 font-medium">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              <span>删除</span>
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+      if (window.lucide) lucide.createIcons();
+    }
+
+    async function toggleRouteStatus(id) {
+      await fetch(`/__gw/api/admin/routes/${id}/toggle`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      fetchAdminRoutes();
+    }
+
+    async function deleteRoute(id) {
+      if (!confirm('确认删除该路由？')) return;
+      await fetch(`/__gw/api/admin/routes/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      fetchAdminRoutes();
+    }
+
+    function openRouteEditModal(id = null) {
+      const modal = document.getElementById('routeModal');
+      const title = document.getElementById('routeModalTitle');
+      const testTip = document.getElementById('targetTestResult');
+      testTip.classList.add('hidden');
+
+      if (id) {
+        const r = adminRoutes.find(x => x.id === id);
+        if (!r) return;
+        title.textContent = `编辑服务: ${r.name}`;
+        document.getElementById('formRouteId').value = r.id;
+        document.getElementById('formName').value = r.name;
+        document.getElementById('formCategory').value = r.category || '';
+        document.getElementById('formSubpath').value = r.subpath;
+        document.getElementById('formTarget').value = r.target;
+        document.getElementById('formIcon').value = r.icon || '';
+        document.getElementById('formOrder').value = r.order || 1;
+        document.getElementById('formDescription').value = r.description || '';
+        document.getElementById('formAutoPrefixSubpath').checked = r.options?.autoPrefixSubpath !== false;
+        document.getElementById('formRewriteLocation').checked = r.options?.rewriteLocation !== false;
+        document.getElementById('formRewriteHtml').checked = r.options?.rewriteHtml !== false;
+        document.getElementById('formInjectBase').checked = r.options?.injectBase === true;
+      } else {
+        title.textContent = '新增代理服务';
+        document.getElementById('formRouteId').value = '';
+        document.getElementById('formName').value = '';
+        document.getElementById('formCategory').value = '常用服务';
+        document.getElementById('formSubpath').value = '';
+        document.getElementById('formTarget').value = '';
+        document.getElementById('formIcon').value = 'globe';
+        document.getElementById('formOrder').value = adminRoutes.length + 1;
+        document.getElementById('formDescription').value = '';
+        document.getElementById('formAutoPrefixSubpath').checked = true;
+        document.getElementById('formRewriteLocation').checked = true;
+        document.getElementById('formRewriteHtml').checked = true;
+        document.getElementById('formInjectBase').checked = false;
+      }
+
+      modal.classList.remove('hidden');
+      setTimeout(() => modal.classList.remove('opacity-0'), 10);
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function closeRouteEditModal() {
+      const modal = document.getElementById('routeModal');
+      modal.classList.add('opacity-0');
+      setTimeout(() => modal.classList.add('hidden'), 150);
+    }
+
+    async function handleRouteFormSubmit(e) {
+      e.preventDefault();
+      const id = document.getElementById('formRouteId').value;
+      const payload = {
+        name: document.getElementById('formName').value,
+        category: document.getElementById('formCategory').value,
+        subpath: document.getElementById('formSubpath').value,
+        target: document.getElementById('formTarget').value,
+        icon: document.getElementById('formIcon').value,
+        order: Number(document.getElementById('formOrder').value) || 1,
+        description: document.getElementById('formDescription').value,
+        options: {
+          autoPrefixSubpath: document.getElementById('formAutoPrefixSubpath').checked,
+          rewriteLocation: document.getElementById('formRewriteLocation').checked,
+          rewriteHtml: document.getElementById('formRewriteHtml').checked,
+          injectBase: document.getElementById('formInjectBase').checked,
+          autoSlash: true,
+          rewriteCookie: false,
+          ws: true,
+          changeOrigin: true
+        }
+      };
+
+      const url = id ? `/__gw/api/admin/routes/${id}` : '/__gw/api/admin/routes';
+      const method = id ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        closeRouteEditModal();
+        fetchAdminRoutes();
+      } else {
+        const err = await res.json();
+        alert(err.error || '保存失败');
+      }
+    }
+
+    async function testCurrentTarget() {
+      const target = document.getElementById('formTarget').value.trim();
+      const tip = document.getElementById('targetTestResult');
+      if (!target) return;
+      tip.classList.remove('hidden');
+      tip.textContent = '测试中...';
+
+      try {
+        const res = await fetch('/__gw/api/admin/test-target', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+          body: JSON.stringify({ target })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          tip.className = 'text-[10px] text-emerald-600 dark:text-emerald-400 block mt-1';
+          tip.textContent = `✓ 连通正常 (${d.statusCode}, ${d.latency})`;
+        } else {
+          tip.className = 'text-[10px] text-rose-500 block mt-1';
+          tip.textContent = `✗ 连通失败: ${d.error || '无法访问'}`;
+        }
+      } catch (e) {
+        tip.className = 'text-[10px] text-rose-500 block mt-1';
+        tip.textContent = '✗ 请求失败';
+      }
+    }
+
+    function openSettingsModal() {
+      document.getElementById('settingsSiteTitle').value = publicData.siteTitle || '';
+      document.getElementById('settingsSiteSubtitle').value = publicData.siteSubtitle || '';
+      document.getElementById('settingsNewPassword').value = '';
+      const modal = document.getElementById('settingsModal');
+      modal.classList.remove('hidden');
+      setTimeout(() => modal.classList.remove('opacity-0'), 10);
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function closeSettingsModal() {
+      const modal = document.getElementById('settingsModal');
+      modal.classList.add('opacity-0');
+      setTimeout(() => modal.classList.add('hidden'), 150);
+    }
+
+    async function handleSettingsSubmit(e) {
+      e.preventDefault();
+      const siteTitle = document.getElementById('settingsSiteTitle').value;
+      const siteSubtitle = document.getElementById('settingsSiteSubtitle').value;
+      const newPassword = document.getElementById('settingsNewPassword').value;
+
+      const res = await fetch('/__gw/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ siteTitle, siteSubtitle, newPassword })
+      });
+      if (res.ok) {
+        alert('全局设置已生效！');
+        closeSettingsModal();
+        fetchPublicInfo();
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>

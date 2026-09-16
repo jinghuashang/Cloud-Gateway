@@ -1,0 +1,33 @@
+{
+  "name": "cloud-gateway",
+  "version": "1.0.0",
+  "description": "High-performance Subpath Reverse Proxy & Dynamic Cloud Service Portal Gateway",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "reverse-proxy",
+    "subpath-proxy",
+    "cloud-gateway",
+    "dashboard",
+    "portal",
+    "websocket",
+    "express",
+    "docker"
+  ],
+  "author": "JinghuaShang",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "http-proxy": "^1.18.1",
+    "http-proxy-middleware": "^3.0.0",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

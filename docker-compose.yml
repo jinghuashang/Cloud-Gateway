@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  cloud-gateway:
+    container_name: cloud-gateway
+    build: .
+    restart: always
+    network_mode: "host"
+    volumes:
+      - ./data:/app/data
+      - ./ssl:/app/ssl:ro
+    environment:
+      - NODE_ENV=production
+      - PORT=8088
+      - DATA_DIR=/app/data
+      - SSL_CERT=/app/ssl/fullchain.pem
+      - SSL_KEY=/app/ssl/privkey.pem
