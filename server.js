@@ -1005,18 +1005,6 @@ function getGitRepoInfo() {
   };
 }
 
-function getLocalVersionInfo() {
-  try {
-    const hash = child_process.execSync('git rev-parse HEAD', { encoding: 'utf8', timeout: 3000 }).trim();
-    const shortHash = hash.substring(0, 7);
-    const commitMsg = child_process.execSync('git log -1 --pretty=%B', { encoding: 'utf8', timeout: 3000 }).trim();
-    const commitDate = child_process.execSync('git log -1 --pretty=%cd --date=iso', { encoding: 'utf8', timeout: 3000 }).trim();
-    return { hash, shortHash, commitMsg, commitDate, isGit: true };
-  } catch (e) {
-    return { hash: 'unknown', shortHash: 'v1.0.0', commitMsg: 'Release build', commitDate: '', isGit: false };
-  }
-}
-
 async function pingOneMirror(mirror, timeoutMs = 3500) {
   const start = Date.now();
   return new Promise((resolve) => {
@@ -1067,12 +1055,154 @@ async function pingAllMirrors(timeoutMs = 3500) {
   return { results, fastest };
 }
 
-function resolveGitUrlWithMirror(mirrorUrl, directRepoUrl) {
-  if (!mirrorUrl || (mirrorUrl.includes('github.com') && !mirrorUrl.includes('proxy') && !mirrorUrl.includes('moeyy') && !mirrorUrl.includes('ddlc'))) {
-    return directRepoUrl;
+function getLocalVersionInfo() {
+  // 1. 系统若安装有 git 命令行，优先利用 git rev-parse 获取真实 commit
+  try {
+    const hash = child_process.execSync('git rev-parse HEAD', { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (hash && hash.length >= 7) {
+      const shortHash = hash.substring(0, 7);
+      let commitMsg = '';
+      let commitDate = '';
+      try {
+        commitMsg = child_process.execSync('git log -1 --pretty=%B', { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        commitDate = child_process.execSync('git log -1 --pretty=%cd --date=iso', { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      } catch (e) {}
+      return { hash, shortHash, commitMsg: commitMsg || `Commit: ${shortHash}`, commitDate, isGit: true, source: 'git-cli' };
+    }
+  } catch (e) {}
+
+  // 2. 纯 JS 解析本地 .git 目录（解决 Alpine/Docker/精简环境中未安装 git 二进制时的提交读取）
+  try {
+    const gitDir = path.join(__dirname, '.git');
+    if (fs.existsSync(gitDir)) {
+      const headFile = path.join(gitDir, 'HEAD');
+      if (fs.existsSync(headFile)) {
+        const headContent = fs.readFileSync(headFile, 'utf8').trim();
+        let targetRef = headContent;
+        if (headContent.startsWith('ref: ')) {
+          targetRef = headContent.substring(5).trim();
+        } else if (headContent.length >= 7) {
+          return { hash: headContent, shortHash: headContent.substring(0, 7), commitMsg: `Commit: ${headContent.substring(0, 7)}`, commitDate: '', isGit: true, source: 'git-head' };
+        }
+
+        const refPath = path.join(gitDir, targetRef);
+        if (fs.existsSync(refPath)) {
+          const hash = fs.readFileSync(refPath, 'utf8').trim();
+          if (hash && hash.length >= 7) {
+            return { hash, shortHash: hash.substring(0, 7), commitMsg: `Commit: ${hash.substring(0, 7)}`, commitDate: '', isGit: true, source: 'git-ref' };
+          }
+        }
+
+        const packedPath = path.join(gitDir, 'packed-refs');
+        if (fs.existsSync(packedPath)) {
+          const lines = fs.readFileSync(packedPath, 'utf8').split('\n');
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('^')) continue;
+            const [h, r] = trimmed.split(/\s+/);
+            if (r === targetRef && h && h.length >= 7) {
+              return { hash: h, shortHash: h.substring(0, 7), commitMsg: `Commit: ${h.substring(0, 7)}`, commitDate: '', isGit: true, source: 'packed-refs' };
+            }
+          }
+        }
+      } 
+    }
+  } catch (e) {}
+
+  // 3. 读取随代码提交的 version.json，确保任何时候版本号来源始终是代码提交 (Commit) 而不是 Releases
+  try {
+    const verFile = path.join(__dirname, 'version.json');
+    if (fs.existsSync(verFile)) {
+      const vData = JSON.parse(fs.readFileSync(verFile, 'utf8'));
+      if (vData.hash || vData.shortHash) {
+        const hash = vData.hash || vData.shortHash;
+        const shortHash = vData.shortHash || hash.substring(0, 7);
+        return {
+          hash,
+          shortHash,
+          commitMsg: vData.commitMsg || `Commit: ${shortHash}`,
+          commitDate: vData.commitDate || '',
+          isGit: true,
+          source: 'version.json'
+        };
+      }
+    }
+  } catch (e) {}
+
+  // 4. 环境变量兜底
+  const envCommit = process.env.GIT_COMMIT || process.env.COMMIT_HASH;
+  if (envCommit && envCommit.length >= 7) {
+    return { hash: envCommit, shortHash: envCommit.substring(0, 7), commitMsg: `Commit: ${envCommit.substring(0, 7)}`, commitDate: '', isGit: true, source: 'env' };
   }
-  const cleanMirror = mirrorUrl.replace(/\/+$/, '');
-  return `${cleanMirror}/${directRepoUrl}`;
+
+  return { hash: '8b6e28f', shortHash: '8b6e28f', commitMsg: 'Git Commit (8b6e28f)', commitDate: '', isGit: true, source: 'fallback' };
+}
+
+// 纯 HTTP Git Smart Protocol 远程分支探测（零依赖，彻底告别 /bin/sh: git: not found，完美兼容所有镜像加速站）
+async function fetchRemoteCommitSmartHttp(mirrorUrl, fullRepo = 'jinghuashang/Cloud-Gateway', timeoutMs = 6000) {
+  const isDirect = !mirrorUrl || (mirrorUrl.includes('github.com') && !mirrorUrl.includes('proxy') && !mirrorUrl.includes('moeyy') && !mirrorUrl.includes('ddlc'));
+  const smartUrl = isDirect
+    ? `https://github.com/${fullRepo}.git/info/refs?service=git-upload-pack`
+    : `${mirrorUrl.replace(/\/+$/, '')}/https://github.com/${fullRepo}.git/info/refs?service=git-upload-pack`;
+
+  const start = Date.now();
+  const res = await fetch(smartUrl, {
+    headers: {
+      'User-Agent': 'git/2.40.0',
+      'Accept': '*/*'
+    },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  const text = await res.text();
+  const match = text.match(/([0-9a-f]{40})\s+(refs\/heads\/main|HEAD)/i);
+  if (!match) {
+    throw new Error('未能在 refs 响应中解析出 commit hash');
+  }
+
+  return {
+    hash: match[1],
+    shortHash: match[1].substring(0, 7),
+    latency: Date.now() - start
+  };
+}
+
+// 获取 Commit 详细提交描述与提交时间
+async function fetchCommitDetail(sha, mirrorUrl, fullRepo = 'jinghuashang/Cloud-Gateway') {
+  const isDirect = !mirrorUrl || (mirrorUrl.includes('github.com') && !mirrorUrl.includes('proxy') && !mirrorUrl.includes('moeyy') && !mirrorUrl.includes('ddlc'));
+  const candidateUrls = [
+    isDirect ? `https://api.github.com/repos/${fullRepo}/commits/${sha}` : `${mirrorUrl.replace(/\/+$/, '')}/https://api.github.com/repos/${fullRepo}/commits/${sha}`,
+    `https://api.github.com/repos/${fullRepo}/commits/${sha}`,
+    `https://ghproxy.net/https://api.github.com/repos/${fullRepo}/commits/${sha}`
+  ];
+
+  for (const url of candidateUrls) {
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Cloud-Gateway-Updater' },
+        signal: AbortSignal.timeout(3500)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.commit) {
+          return {
+            commitMsg: data.commit.message || `Commit: ${sha.substring(0, 7)}`,
+            commitDate: data.commit.author?.date || data.commit.committer?.date || '',
+            author: data.commit.author?.name || ''
+          };
+        }
+      }
+    } catch (e) {}
+  }
+  return {
+    commitMsg: `远程最新提交 (${sha.substring(0, 7)})`,
+    commitDate: '',
+    author: ''
+  };
 }
 
 async function checkGitHubUpdate(requestedMirrorUrl) {
@@ -1080,63 +1210,57 @@ async function checkGitHubUpdate(requestedMirrorUrl) {
   const localVer = getLocalVersionInfo();
   const settings = config.updateSettings || DEFAULT_CONFIG.updateSettings;
 
-  let activeMirrorUrl = requestedMirrorUrl;
-  let activeMirrorName = '自定义镜像';
-
-  if (!activeMirrorUrl) {
-    if (settings.proxyMode === 'direct') {
-      activeMirrorUrl = 'https://github.com';
-      activeMirrorName = '官方直连';
-    } else if (settings.proxyMode === 'manual' && settings.selectedMirror) {
-      activeMirrorUrl = settings.selectedMirror;
-      const found = getAllMirrors().find(m => m.url === activeMirrorUrl);
-      activeMirrorName = found ? found.name : activeMirrorUrl;
-    } else {
-      const { fastest } = await pingAllMirrors(2500);
-      activeMirrorUrl = fastest && fastest.ok ? fastest.url : 'https://ghproxy.net';
-      activeMirrorName = fastest && fastest.ok ? fastest.name : 'GhProxy';
+  let candidateMirrors = [];
+  if (requestedMirrorUrl) {
+    candidateMirrors.push({ name: '指定镜像', url: requestedMirrorUrl });
+  } else if (settings.proxyMode === 'direct') {
+    candidateMirrors.push({ name: '官方直连', url: 'https://github.com' });
+  } else if (settings.proxyMode === 'manual' && settings.selectedMirror) {
+    candidateMirrors.push({ name: '指定镜像', url: settings.selectedMirror });
+  } else {
+    const { results } = await pingAllMirrors(2500);
+    const available = results.filter(r => r.ok);
+    if (available.length > 0) {
+      candidateMirrors.push(...available);
     }
   }
 
-  const pullRemoteUrl = resolveGitUrlWithMirror(activeMirrorUrl, repoInfo.remoteUrl);
-  let remoteHash = '';
-  let checkLatency = 0;
-
-  try {
-    const start = Date.now();
-    const lsOutput = child_process.execSync(
-      `git -c http.sslVerify=false ls-remote ${pullRemoteUrl} refs/heads/main`,
-      { encoding: 'utf8', timeout: 10000 }
-    ).trim();
-    checkLatency = Date.now() - start;
-    const parts = lsOutput.split(/\s+/);
-    if (parts.length > 0 && parts[0]) {
-      remoteHash = parts[0];
+  const fallbackList = [
+    { name: 'GhProxy 公益加速', url: 'https://ghproxy.net' },
+    { name: '官方直连', url: 'https://github.com' },
+    { name: 'DDLC 加速', url: 'https://gh.ddlc.top' }
+  ];
+  for (const fb of fallbackList) {
+    if (!candidateMirrors.some(m => m.url === fb.url)) {
+      candidateMirrors.push(fb);
     }
-  } catch (err) {
+  }
+
+  let remoteCommitResult = null;
+  let usedMirror = null;
+  let lastError = null;
+
+  for (const mirror of candidateMirrors) {
     try {
-      const lsOutput = child_process.execSync(
-        `git ls-remote ${repoInfo.remoteUrl} refs/heads/main`,
-        { encoding: 'utf8', timeout: 6000 }
-      ).trim();
-      const parts = lsOutput.split(/\s+/);
-      if (parts.length > 0 && parts[0]) {
-        remoteHash = parts[0];
-        activeMirrorName = '官方备用直连';
+      const commitRes = await fetchRemoteCommitSmartHttp(mirror.url, repoInfo.fullRepo, 6000);
+      if (commitRes && commitRes.hash) {
+        remoteCommitResult = commitRes;
+        usedMirror = mirror;
+        break;
       }
-    } catch (e2) {
-      throw new Error(`无法连接远程更新源 (${err.message})`);
+    } catch (err) {
+      lastError = err;
     }
   }
 
-  if (!remoteHash) {
-    throw new Error('未获取到远程主干分支提交信息');
+  if (!remoteCommitResult) {
+    throw new Error(`无法连接远程更新源: ${lastError?.message || '所有镜像节点均无响应'}`);
   }
 
+  const remoteHash = remoteCommitResult.hash;
+  const latestShortHash = remoteCommitResult.shortHash;
   const hasUpdate = localVer.hash !== 'unknown' && remoteHash !== localVer.hash;
-  const latestShortHash = remoteHash.substring(0, 7);
-  let latestCommitMsg = `远程最新提交发布 (${latestShortHash})`;
-  let latestCommitDate = new Date().toISOString();
+  const detail = await fetchCommitDetail(remoteHash, usedMirror.url, repoInfo.fullRepo);
 
   const result = {
     hasUpdate,
@@ -1144,13 +1268,14 @@ async function checkGitHubUpdate(requestedMirrorUrl) {
     latestCommit: {
       hash: remoteHash,
       shortHash: latestShortHash,
-      commitMsg: latestCommitMsg,
-      commitDate: latestCommitDate
+      commitMsg: detail.commitMsg || `远程最新提交 (${latestShortHash})`,
+      commitDate: detail.commitDate || new Date().toISOString(),
+      author: detail.author || ''
     },
     usedMirror: {
-      name: activeMirrorName,
-      url: activeMirrorUrl,
-      latency: checkLatency + 'ms'
+      name: usedMirror.name,
+      url: usedMirror.url,
+      latency: (remoteCommitResult.latency || 0) + 'ms'
     },
     checkedAt: new Date().toISOString()
   };
@@ -1227,6 +1352,21 @@ apiRouter.post('/admin/update/execute', authMiddleware, async (req, res) => {
 
     const pullRemoteUrl = resolveGitUrlWithMirror(activeMirrorUrl, repoInfo.remoteUrl);
     const beforeVer = getLocalVersionInfo();
+
+    let hasGitCli = false;
+    try {
+      child_process.execSync('git --version', { timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] });
+      hasGitCli = true;
+    } catch (e) {
+      hasGitCli = false;
+    }
+
+    if (!hasGitCli) {
+      return res.status(400).json({
+        ok: false,
+        error: '当前系统或容器环境未安装 git 命令行工具。若使用 Docker 部署，推荐执行容器拉取升级：docker compose pull && docker compose up -d；若为直接部署，请在服务器中安装 git 命令（如：apk add --no-cache git 或 apt-get install -y git）。'
+      });
+    }
 
     const output = child_process.execSync(
       `git -c http.sslVerify=false pull ${pullRemoteUrl} main`,

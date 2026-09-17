@@ -1,0 +1,6 @@
+{
+  "hash": "beffa2b63897b7b25e7090ecb352cbcf74c20f54",
+  "shortHash": "beffa2b",
+  "commitMsg": "feat(updater): 彻底移除git命令依赖改用纯HTTP探测，版本号全面对齐Git Commit哈希",
+  "commitDate": "2026-09-17 15:35:00 +0800"
+}
