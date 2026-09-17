@@ -87,13 +87,13 @@
       box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.12);
     }
 
-    /* 贝塞尔流线动画 */
+    /* 贝塞尔流线动画 (大屏自适应超长路径防截断) */
     @keyframes drawPath {
-      from { stroke-dashoffset: 1000; }
+      from { stroke-dashoffset: 2500; }
       to { stroke-dashoffset: 0; }
     }
     .animate-trend {
-      stroke-dasharray: 1000;
+      stroke-dasharray: 2500;
       animation: drawPath 1.8s ease-out forwards;
     }
   </style>
@@ -227,25 +227,25 @@
             </span>
           </div>
 
-          <!-- 精致平滑 SVG 曲线图 (纯动态实时渲染，告别硬编码日期与数值) -->
+          <!-- 精致平滑 SVG 曲线图 (全自适应大屏幕，像素级垂直无缝对齐) -->
           <div class="pt-3 pb-1" id="trafficChartBox">
-            <svg id="trafficSvg" viewBox="0 0 500 175" class="w-full h-36 sm:h-40 overflow-visible transition-all duration-500">
+            <svg id="trafficSvg" viewBox="0 0 500 150" class="w-full h-36 sm:h-40 overflow-visible transition-all duration-500">
               <defs>
                 <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stop-color="#0284c7" stop-opacity="0.22"/>
                   <stop offset="100%" stop-color="#0284c7" stop-opacity="0.0"/>
                 </linearGradient>
               </defs>
-              <line x1="0" y1="30" x2="500" y2="30" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
-              <line x1="0" y1="80" x2="500" y2="80" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
-              <line x1="0" y1="130" x2="500" y2="130" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
+              <line x1="0" y1="25" x2="100%" y2="25" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
+              <line x1="0" y1="75" x2="100%" y2="75" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
+              <line x1="0" y1="125" x2="100%" y2="125" stroke="currentColor" class="text-zinc-100 dark:text-zinc-800" stroke-width="1" stroke-dasharray="4 4"/>
 
               <!-- 动态 SVG 曲线与高亮点内容容器 -->
               <g id="dynamicSvgCurve"></g>
             </svg>
 
-            <!-- 动态日期行 (根据真实当前时间动态呈现最近 7 天) -->
-            <div id="trafficDatesRow" class="flex items-center justify-between text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa] mt-2">
+            <!-- 动态日期行 (坐标级精确垂直对齐) -->
+            <div id="trafficDatesRow" class="relative h-5 text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa] mt-2">
             </div>
           </div>
         </div>
@@ -623,8 +623,12 @@
         } catch (e) {}
       }, 5000);
 
+    let lastTrafficStats = null;
+    let chartResizeObserver = null;
+
     function renderTrafficChart(stats) {
       if (!stats || !Array.isArray(stats.points) || stats.points.length === 0) return;
+      lastTrafficStats = stats;
 
       // 1. 更新顶部实时监控标签
       const liveTag = document.getElementById('realtimeLiveTag');
@@ -632,21 +636,33 @@
         liveTag.textContent = `实时监控 · ${stats.currentQps} req/s`;
       }
 
-      // 2. 映射 7 个坐标点位 (SVG viewBox: 500 x 175)
+      const chartBox = document.getElementById('trafficChartBox');
+      const svg = document.getElementById('trafficSvg');
+      if (!chartBox || !svg) return;
+
+      // 2. 获取自适应真实像素宽度与固定比例高度 (全自适应大屏幕，彻底告别比例挤压导致的居中空白)
+      const width = Math.max(chartBox.clientWidth || 0, 320);
+      const height = 150;
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+      // 动态更新参考虚线宽度
+      svg.querySelectorAll('line').forEach(line => line.setAttribute('x2', width));
+
+      // 3. 映射 7 个坐标点位 (首尾内边距保护，严丝合缝垂直对齐下方日期行)
       const pts = stats.points;
       const values = pts.map(p => p.value);
       const minV = Math.min(...values);
       const maxV = Math.max(...values);
       const range = (maxV - minV) || 1;
 
-      // 7 点等距 X 坐标: [0, 83, 166, 250, 333, 416, 500]
+      const padX = width < 420 ? 20 : 36;
       const coords = pts.map((p, i) => {
-        const x = i === pts.length - 1 ? 500 : Math.round((i / (pts.length - 1)) * 500);
-        const y = Math.round(135 - ((p.value - minV) / range) * 105);
+        const x = Math.round(padX + (i / (pts.length - 1)) * (width - 2 * padX));
+        const y = Math.round(122 - ((p.value - minV) / range) * 92);
         return { x, y, value: p.value, isPeak: !!p.isPeak, date: p.date, label: p.label };
       });
 
-      // 3. 计算 Catmull-Rom 三次贝塞尔平滑曲线路径
+      // 4. 计算 Catmull-Rom 三次贝塞尔平滑曲线路径
       let curveD = `M ${coords[0].x} ${coords[0].y}`;
       for (let i = 0; i < coords.length - 1; i++) {
         const p0 = coords[i === 0 ? 0 : i - 1];
@@ -661,9 +677,9 @@
 
         curveD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
       }
-      const areaD = `${curveD} L 500 160 L 0 160 Z`;
+      const areaD = `${curveD} L ${coords[coords.length - 1].x} 145 L ${coords[0].x} 145 Z`;
 
-      // 4. 找到峰值点、中间参考点与最新点并彻底排查去重
+      // 5. 找到峰值点、中间参考点与最新点
       let peakIdx = 0;
       coords.forEach((c, idx) => {
         if (c.value > coords[peakIdx].value) peakIdx = idx;
@@ -674,31 +690,31 @@
       const midIdx = peakIdx > 2 ? 1 : (peakIdx < 2 ? 4 : 2);
       const midPoint = coords[midIdx];
 
-      // 5. 组装高亮标注点 SVG (首尾边界防裁剪、文字发光 Halo、杜绝同点重叠！)
-      const peakAnchor = peak.x >= 450 ? 'end' : (peak.x <= 50 ? 'start' : 'middle');
-      const peakTextX = peak.x >= 450 ? 490 : (peak.x <= 50 ? 10 : peak.x);
-      const peakTextY = Math.max(18, peak.y - 14);
+      // 6. 组装高亮标注点 SVG (首尾边界自适应防裁剪、文字发光 Halo、支持暗黑模式)
+      const peakAnchor = peak.x >= width - 60 ? 'end' : (peak.x <= 60 ? 'start' : 'middle');
+      const peakTextX = peak.x >= width - 60 ? width - 10 : (peak.x <= 60 ? 10 : peak.x);
+      const peakTextY = Math.max(16, peak.y - 12);
 
       let pointsSvg = `
         <!-- 峰值发光高亮点 -->
         <circle cx="${peak.x}" cy="${peak.y}" r="7" class="fill-blue-500/20 animate-ping" opacity="0.75"/>
         <circle cx="${peak.x}" cy="${peak.y}" r="4.5" class="fill-white stroke-blue-600" stroke-width="2.5"/>
         <text x="${peakTextX}" y="${peakTextY}" text-anchor="${peakAnchor}" 
-              class="text-[11px] font-mono font-bold fill-[#09090b] dark:fill-[#fafafa] select-none"
-              style="paint-order: stroke fill; stroke: var(--bg-white, #ffffff); stroke-width: 4px; stroke-linejoin: round;">${peak.value} req/s</text>
+              class="text-[11px] font-mono font-bold fill-[#09090b] dark:fill-[#fafafa] stroke-white dark:stroke-zinc-900 select-none"
+              style="paint-order: stroke fill; stroke-width: 4px; stroke-linejoin: round;">${peak.value} req/s</text>
       `;
 
-      // 若今日不是峰值点，才额外绘制今日最新点（若今日就是峰值，仅绘制一次，彻底杜绝数据重合！）
+      // 若今日不是峰值点，才额外绘制今日最新点
       if (!isPeakToday) {
-        const lastAnchor = 'end';
-        const lastTextX = 490;
-        const lastTextY = Math.max(18, lastPoint.y - 12);
+        const lastAnchor = lastPoint.x >= width - 40 ? 'end' : 'middle';
+        const lastTextX = lastPoint.x >= width - 40 ? width - 6 : lastPoint.x;
+        const lastTextY = Math.max(16, lastPoint.y - 10);
         pointsSvg += `
           <!-- 今日最新点 -->
           <circle cx="${lastPoint.x}" cy="${lastPoint.y}" r="3.5" class="fill-white stroke-blue-600" stroke-width="2"/>
           <text x="${lastTextX}" y="${lastTextY}" text-anchor="${lastAnchor}" 
-                class="text-[10px] font-mono font-medium fill-[#71717a] dark:fill-[#a1a1aa] select-none"
-                style="paint-order: stroke fill; stroke: var(--bg-white, #ffffff); stroke-width: 4px; stroke-linejoin: round;">${lastPoint.value}</text>
+                class="text-[10px] font-mono font-medium fill-[#71717a] dark:fill-[#a1a1aa] stroke-white dark:stroke-zinc-900 select-none"
+                style="paint-order: stroke fill; stroke-width: 4px; stroke-linejoin: round;">${lastPoint.value}</text>
         `;
       }
 
@@ -707,9 +723,9 @@
         pointsSvg += `
           <!-- 中间参考点 -->
           <circle cx="${midPoint.x}" cy="${midPoint.y}" r="3.5" class="fill-white stroke-blue-600" stroke-width="2"/>
-          <text x="${midPoint.x}" y="${Math.max(18, midPoint.y - 12)}" text-anchor="middle" 
-                class="text-[10px] font-mono font-medium fill-[#71717a] dark:fill-[#a1a1aa] select-none"
-                style="paint-order: stroke fill; stroke: var(--bg-white, #ffffff); stroke-width: 4px; stroke-linejoin: round;">${midPoint.value}</text>
+          <text x="${midPoint.x}" y="${Math.max(16, midPoint.y - 10)}" text-anchor="middle" 
+                class="text-[10px] font-mono font-medium fill-[#71717a] dark:fill-[#a1a1aa] stroke-white dark:stroke-zinc-900 select-none"
+                style="paint-order: stroke fill; stroke-width: 4px; stroke-linejoin: round;">${midPoint.value}</text>
         `;
       }
 
@@ -722,21 +738,34 @@
         `;
       }
 
-      // 6. 注入底部动态日期行 (去重冗余文案，规整展示)
+      // 7. 注入底部动态日期行 (坐标级精确对齐，X 坐标与数据点严格一致)
       const datesRow = document.getElementById('trafficDatesRow');
       if (datesRow) {
+        datesRow.className = 'relative h-5 text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa] mt-2';
         datesRow.innerHTML = coords.map((c, i) => {
           const isPeak = (i === peakIdx);
           const isToday = (i === coords.length - 1);
-          if (isPeak && isToday) {
-            return `<span class="font-bold text-[#09090b] dark:text-[#fafafa]">${c.date} <span class="text-blue-600 dark:text-blue-400 font-semibold">(峰值)</span></span>`;
-          } else if (isPeak) {
-            return `<span class="font-bold text-[#09090b] dark:text-[#fafafa]">${c.date} <span class="text-blue-600 dark:text-blue-400 font-semibold">(峰值)</span></span>`;
+          let label = c.date;
+          let cls = 'whitespace-nowrap select-none';
+          if (isPeak) {
+            cls += ' font-bold text-[#09090b] dark:text-[#fafafa]';
+            label += ' <span class="text-blue-600 dark:text-blue-400 font-semibold hidden sm:inline">(峰值)</span>';
           } else if (isToday) {
-            return `<span class="font-bold text-[#09090b] dark:text-[#fafafa]">${c.date} <span class="text-[#71717a] dark:text-[#a1a1aa] font-normal">(今天)</span></span>`;
+            cls += ' font-bold text-[#09090b] dark:text-[#fafafa]';
+            label += ' <span class="text-[#71717a] dark:text-[#a1a1aa] font-normal hidden sm:inline">(今天)</span>';
           }
-          return `<span>${c.date}</span>`;
+          return `<span class="${cls}" style="position: absolute; left: ${c.x}px; transform: translateX(-50%);">${label}</span>`;
         }).join('');
+      }
+
+      // 8. 初始化自适应大屏幕与窗口缩放监听器
+      if (!chartResizeObserver && window.ResizeObserver) {
+        chartResizeObserver = new ResizeObserver(() => {
+          if (lastTrafficStats) {
+            renderTrafficChart(lastTrafficStats);
+          }
+        });
+        chartResizeObserver.observe(chartBox);
       }
     }
 
