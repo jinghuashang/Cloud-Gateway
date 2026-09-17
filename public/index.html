@@ -1664,7 +1664,10 @@
         const res = await fetch('/__gw/api/admin/update/status', {
           headers: { 'Authorization': `Bearer ${authToken}` }
         });
-        if (!res.ok) return;
+        const contentType = res.headers.get('content-type') || '';
+        if (!res.ok || !contentType.includes('application/json')) {
+          return;
+        }
         updateStatusData = await res.json();
 
         // 渲染基础信息
@@ -1863,6 +1866,10 @@
           method: 'POST',
           headers: { 'Authorization': `Bearer ${authToken}` }
         });
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          throw new Error(res.status === 404 ? '更新接口未响应 (404)，请确认网关服务端已重启加载最新代码' : `服务端返回异常 (${res.status})`);
+        }
         const d = await res.json();
         if (d.ok) {
           document.getElementById('settingsLastCheckTime').textContent = new Date().toLocaleString();

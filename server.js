@@ -938,6 +938,28 @@ apiRouter.post('/admin/settings', authMiddleware, (req, res) => {
 apiRouter.post('/admin/test-target', authMiddleware, (req, res) => {
   const { target } = req.body;
   if (!target) return res.status(400).json({ error: '缺少 target 地址' });
+  try {
+    const start = Date.now();
+    const parsed = new URL(target);
+    const client = parsed.protocol === 'https:' ? require('https') : require('http');
+    const testReq = client.get(target, { timeout: 3500, rejectUnauthorized: false }, (testRes) => {
+      res.json({
+        ok: true,
+        statusCode: testRes.statusCode,
+        latency: Date.now() - start + 'ms'
+      });
+    });
+    testReq.on('error', (err) => {
+      res.json({ ok: false, error: err.message });
+    });
+    testReq.on('timeout', () => {
+      testReq.destroy();
+      res.json({ ok: false, error: '连接超时 (3.5秒)' });
+    });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
 
 // ======================= 自动检测与 GitHub 镜像更新引擎 =======================
 const DEFAULT_GITHUB_MIRRORS = [
@@ -1225,28 +1247,6 @@ apiRouter.post('/admin/update/execute', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
-  }
-});
-  try {
-    const start = Date.now();
-    const parsed = new URL(target);
-    const client = parsed.protocol === 'https:' ? require('https') : require('http');
-    const testReq = client.get(target, { timeout: 3500, rejectUnauthorized: false }, (testRes) => {
-      res.json({
-        ok: true,
-        statusCode: testRes.statusCode,
-        latency: Date.now() - start + 'ms'
-      });
-    });
-    testReq.on('error', (err) => {
-      res.json({ ok: false, error: err.message });
-    });
-    testReq.on('timeout', () => {
-      testReq.destroy();
-      res.json({ ok: false, error: '连接超时 (3.5秒)' });
-    });
-  } catch (err) {
-    res.json({ ok: false, error: err.message });
   }
 });
 
