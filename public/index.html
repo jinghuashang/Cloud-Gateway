@@ -385,6 +385,14 @@
 
         <!-- 第二行/右侧：操作按钮组 (移动端自适应平铺，桌面端靠右并排) -->
         <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+          <button id="adminUpdateBadgeBtn" onclick="openUpdateNoticeModal()" class="hidden inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 rounded-lg shadow-sm transition-all whitespace-nowrap animate-pulse">
+            <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+            <span>发现新版本</span>
+          </button>
+          <button onclick="openUpdateSettingsModal()" class="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium text-[#09090b] dark:text-[#fafafa] bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 transition-all whitespace-nowrap">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span>更新设置</span>
+          </button>
           <button onclick="openRouteEditModal()" class="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 rounded-lg shadow-sm transition-all whitespace-nowrap">
             <i data-lucide="plus" class="w-3.5 h-3.5"></i>
             <span>新增路由</span>
@@ -410,7 +418,7 @@
       
       <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-sm">
         
-        <div class="px-4 sm:px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50/50 dark:bg-zinc-850">
+        <div class="px-4 sm:px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50/50 dark:bg-zinc-800/60">
           <span class="text-xs font-semibold text-[#09090b] dark:text-[#fafafa]">当前活跃代理路由列表</span>
           <span class="text-[10px] sm:text-[11px] text-[#71717a]">修改后内存热生效</span>
         </div>
@@ -569,6 +577,203 @@
           <button type="submit" class="px-4 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm">保存设置</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ======================= 发现新版本提醒弹窗 ======================= -->
+  <div id="updateNoticeModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-md p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl space-y-4">
+      
+      <!-- 头部：标题与关闭 -->
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+            <i data-lucide="arrow-up-circle" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa] flex items-center gap-1.5">
+              <span>发现新版本</span>
+              <span id="updateNoticeTag" class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 font-bold">NEW</span>
+            </h3>
+            <p class="text-[11px] text-[#71717a] dark:text-[#a1a1aa]">GitHub 远程仓库检测到新的提交版本</p>
+          </div>
+        </div>
+        <button onclick="closeUpdateNoticeModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- 版本对比卡片 -->
+      <div class="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-800 space-y-2.5 text-xs">
+        <div class="flex items-center justify-between">
+          <span class="text-[#71717a] dark:text-[#a1a1aa]">当前本地版本:</span>
+          <span id="updateNoticeCurrentCommit" class="font-mono font-medium text-[#09090b] dark:text-[#fafafa]">--</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-[#71717a] dark:text-[#a1a1aa]">远程最新提交:</span>
+          <span id="updateNoticeLatestCommit" class="font-mono font-bold text-blue-600 dark:text-blue-400">--</span>
+        </div>
+        <div class="pt-1.5 border-t border-zinc-200/60 dark:border-zinc-800">
+          <span class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] block mb-1">最新提交说明:</span>
+          <p id="updateNoticeCommitMsg" class="font-mono text-[11px] text-[#09090b] dark:text-[#fafafa] bg-white dark:bg-zinc-900 p-2 rounded-lg border border-zinc-200/50 dark:border-zinc-800 break-words leading-relaxed">正在获取...</p>
+        </div>
+      </div>
+
+      <!-- 当前加速代理提示 -->
+      <div class="flex items-center justify-between text-[11px] text-[#71717a] dark:text-[#a1a1aa] px-1">
+        <span class="flex items-center gap-1.5 truncate">
+          <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-500 shrink-0"></i>
+          <span class="truncate">镜像加速通道: <span id="updateNoticeMirrorName" class="font-medium text-[#09090b] dark:text-[#fafafa]">自动测速优选</span></span>
+        </span>
+        <button onclick="closeUpdateNoticeModal(); openUpdateSettingsModal();" class="text-blue-600 dark:text-blue-400 hover:underline shrink-0 ml-2">更换源</button>
+      </div>
+
+      <!-- 执行状态/日志显示区 (执行更新时动态展开) -->
+      <div id="updateExecuteProgress" class="hidden p-3 rounded-xl bg-zinc-900 text-zinc-100 font-mono text-[11px] space-y-1.5 max-h-36 overflow-y-auto">
+        <div class="flex items-center gap-2 text-blue-400">
+          <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i>
+          <span id="updateExecuteStatusText">正在通过镜像加速站拉取最新提交...</span>
+        </div>
+        <pre id="updateExecuteLog" class="text-[10px] text-zinc-400 whitespace-pre-wrap leading-relaxed"></pre>
+      </div>
+
+      <!-- 操作按钮栏 -->
+      <div class="pt-2 flex items-center justify-end gap-2 text-xs">
+        <button type="button" onclick="dismissUpdateNotice()" class="px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[#71717a] dark:text-[#a1a1aa] hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-all">稍后提醒</button>
+        <button type="button" onclick="closeUpdateNoticeModal(); openUpdateSettingsModal();" class="px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[#09090b] dark:text-[#fafafa] hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-all">更新设置</button>
+        <button type="button" id="btnExecuteUpdate" onclick="handleExecuteUpdate()" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm transition-all flex items-center gap-1.5">
+          <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
+          <span>立即更新</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ======================= 更新与镜像源高级设置模态框 ======================= -->
+  <div id="updateSettingsModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-xl p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+      
+      <!-- 头部 -->
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa]">更新与 GitHub 镜像代理设置</h3>
+            <p class="text-[11px] text-[#71717a] dark:text-[#a1a1aa]">自动探测版本提交，集成公益镜像站测速优选与自定义代理</p>
+          </div>
+        </div>
+        <button onclick="closeUpdateSettingsModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- 板块 1: 当前版本状态与手动检测 -->
+      <div class="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div class="space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="text-[#71717a] dark:text-[#a1a1aa]">当前版本:</span>
+            <span id="settingsCurrentCommit" class="font-mono font-bold text-[#09090b] dark:text-[#fafafa]">--</span>
+            <span id="settingsRepoName" class="text-[10px] text-[#71717a] font-mono">(Cloud-Gateway)</span>
+          </div>
+          <div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa]">
+            <span>上次检查: </span>
+            <span id="settingsLastCheckTime">未检测</span>
+          </div>
+        </div>
+        <button onclick="triggerManualUpdateCheck()" id="btnManualCheck" class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-sm transition-all whitespace-nowrap">
+          <i data-lucide="search" class="w-3.5 h-3.5"></i>
+          <span>检查最新提交</span>
+        </button>
+      </div>
+
+      <!-- 板块 2: GitHub 代理模式切换 -->
+      <div class="space-y-2">
+        <label class="block text-xs font-semibold text-[#09090b] dark:text-[#fafafa]">代理拉取策略</label>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+          
+          <label class="relative flex flex-col p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 cursor-pointer hover:border-blue-500/50 transition-all">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-semibold text-[#09090b] dark:text-[#fafafa] flex items-center gap-1">
+                <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-500"></i>
+                <span>自动测速优选</span>
+              </span>
+              <input type="radio" name="proxyMode" value="auto" class="text-blue-600" onchange="handleProxyModeChange(this.value)">
+            </div>
+            <span class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-relaxed">每次更新自动测速并选择延迟最低的可用镜像 (推荐)</span>
+          </label>
+
+          <label class="relative flex flex-col p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 cursor-pointer hover:border-blue-500/50 transition-all">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-semibold text-[#09090b] dark:text-[#fafafa] flex items-center gap-1">
+                <i data-lucide="pin" class="w-3.5 h-3.5 text-blue-500"></i>
+                <span>手动指定节点</span>
+              </span>
+              <input type="radio" name="proxyMode" value="manual" class="text-blue-600" onchange="handleProxyModeChange(this.value)">
+            </div>
+            <span class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-relaxed">固定使用下方由您指定的镜像代理站</span>
+          </label>
+
+          <label class="relative flex flex-col p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 cursor-pointer hover:border-blue-500/50 transition-all">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-semibold text-[#09090b] dark:text-[#fafafa] flex items-center gap-1">
+                <i data-lucide="globe" class="w-3.5 h-3.5 text-zinc-500"></i>
+                <span>官方直连</span>
+              </span>
+              <input type="radio" name="proxyMode" value="direct" class="text-blue-600" onchange="handleProxyModeChange(this.value)">
+            </div>
+            <span class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-relaxed">直接访问 GitHub 官方，不经过任何第三方镜像代理</span>
+          </label>
+
+        </div>
+      </div>
+
+      <!-- 板块 3: 镜像列表与实时测速 -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-[#09090b] dark:text-[#fafafa] flex items-center gap-1.5">
+            <span>镜像站点节点矩阵</span>
+            <span id="fastestMirrorTip" class="hidden text-[10px] text-emerald-600 dark:text-emerald-400 font-mono"></span>
+          </label>
+          <button onclick="pingAllMirrorsUI()" id="btnPingAll" class="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline">
+            <i data-lucide="activity" class="w-3.5 h-3.5"></i>
+            <span>全网自动测速</span>
+          </button>
+        </div>
+
+        <!-- 镜像卡片容器 (动态渲染) -->
+        <div id="mirrorsListContainer" class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+          <!-- 动态渲染镜像节点 -->
+        </div>
+      </div>
+
+      <!-- 板块 4: 手动添加自定义镜像站 -->
+      <div class="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-800 space-y-2">
+        <span class="text-xs font-semibold text-[#09090b] dark:text-[#fafafa] block">手动添加自定义镜像站</span>
+        <div class="grid grid-cols-1 sm:grid-cols-[1fr_1.8fr_auto] gap-2 items-center">
+          <input type="text" id="customMirrorName" placeholder="节点名称 (如: 私有加速源)" class="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg text-xs text-[#09090b] dark:text-[#fafafa]">
+          <input type="text" id="customMirrorUrl" placeholder="镜像 URL (如: https://ghproxy.example.com)" class="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg text-xs font-mono text-[#09090b] dark:text-[#fafafa]">
+          <button type="button" onclick="handleAddCustomMirror()" class="px-3.5 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
+            <span>添加并测速</span>
+          </button>
+        </div>
+        <p class="text-[10px] text-[#71717a]">支持任意 Cloudflare Worker 自建代理、反向代理或内部加速网关。</p>
+      </div>
+
+      <!-- 底部操作按钮 -->
+      <div class="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-zinc-100 dark:border-zinc-800">
+        <label class="flex items-center gap-1.5 text-xs text-[#71717a] cursor-pointer select-none">
+          <input type="checkbox" id="settingsAutoCheck" class="rounded border-zinc-300 text-blue-600">
+          <span>进入控制台时自动检测 GitHub 新版本</span>
+        </label>
+        <div class="flex items-center justify-end gap-2 text-xs">
+          <button type="button" onclick="closeUpdateSettingsModal()" class="px-3.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[#71717a] dark:text-[#a1a1aa] font-medium">关闭</button>
+          <button type="button" onclick="saveUpdateSettingsFromUI()" class="px-4 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm">保存更新配置</button>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -1006,7 +1211,10 @@
         const res = await fetch('/__gw/api/auth/check', {
           headers: { 'Authorization': `Bearer ${authToken}` }
         });
-        if (res.ok) btnText.textContent = '控制台';
+        if (res.ok) {
+        btnText.textContent = '控制台';
+        checkUpdateStatusOnAuth();
+      }
         else handleLogout();
       } catch (e) {
         handleLogout();
@@ -1016,6 +1224,8 @@
     function handleLogout() {
       authToken = '';
       localStorage.removeItem('cloud_gateway_token');
+      const badge = document.getElementById('adminUpdateBadgeBtn');
+      if (badge) badge.classList.add('hidden');
       checkAuthStatus();
       closeAdminPanel();
     }
@@ -1085,7 +1295,7 @@
       // 2. 移动端卡片视图 (彻底杜绝文字竖排挤压！)
       const mobileList = document.getElementById('adminMobileList');
       mobileList.innerHTML = adminRoutes.map(r => `
-        <div class="p-3.5 rounded-xl bg-zinc-50/60 dark:bg-zinc-850/60 border border-zinc-200/60 dark:border-zinc-800 space-y-2.5">
+        <div class="p-3.5 rounded-xl bg-zinc-50/60 dark:bg-zinc-800/60/60 border border-zinc-200/60 dark:border-zinc-800 space-y-2.5">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
               <div class="w-6 h-6 rounded bg-zinc-200/80 dark:bg-zinc-800 flex items-center justify-center text-[#09090b] dark:text-[#fafafa] shrink-0">
@@ -1288,6 +1498,383 @@
         alert('全局设置已生效！');
         closeSettingsModal();
         fetchPublicInfo();
+      }
+    }
+
+    // ======================= 更新与镜像代理交互逻辑 =======================
+    let updateStatusData = null;
+    let mirrorPingResults = {}; // url -> { latency, ok, error }
+
+    async function checkUpdateStatusOnAuth() {
+      if (!authToken) return;
+      try {
+        const res = await fetch('/__gw/api/admin/update/status', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) return;
+        updateStatusData = await res.json();
+        
+        // 若配置开启了自动检查 (autoCheck !== false)
+        if (updateStatusData.updateSettings?.autoCheck !== false) {
+          triggerUpdateCheckBackground();
+        }
+      } catch (e) {}
+    }
+
+    async function triggerUpdateCheckBackground() {
+      if (!authToken) return;
+      try {
+        const res = await fetch('/__gw/api/admin/update/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) return;
+        const checkResult = await res.json();
+        if (checkResult.ok) {
+          handleUpdateCheckResult(checkResult, false);
+        }
+      } catch (e) {}
+    }
+
+    function handleUpdateCheckResult(result, isManual = false) {
+      const badgeBtn = document.getElementById('adminUpdateBadgeBtn');
+      if (result.hasUpdate) {
+        if (badgeBtn) badgeBtn.classList.remove('hidden');
+
+        // 判断是否已经被用户在本次会话主动“稍后提醒”忽略过
+        const dismissedHash = sessionStorage.getItem('dismiss_update_hash');
+        const latestHash = result.latestCommit?.hash || '';
+        if (isManual || dismissedHash !== latestHash) {
+          openUpdateNoticeModal(result);
+        }
+      } else {
+        if (badgeBtn) badgeBtn.classList.add('hidden');
+        if (isManual) {
+          alert('当前已是最新版本，未检测到新的 GitHub 提交！');
+        }
+      }
+    }
+
+    function openUpdateNoticeModal(data) {
+      if (!data && updateStatusData?.lastCheck) {
+        data = updateStatusData.lastCheck;
+      }
+      if (!data) return;
+
+      const currentCommit = data.currentCommit?.shortHash || '--';
+      const latestCommit = data.latestCommit?.shortHash || '--';
+      const commitMsg = data.latestCommit?.commitMsg || '检测到新的提交发布';
+      const mirrorName = data.usedMirror?.name || 'GhProxy';
+      const latency = data.usedMirror?.latency ? `(${data.usedMirror.latency})` : '';
+
+      document.getElementById('updateNoticeCurrentCommit').textContent = currentCommit;
+      document.getElementById('updateNoticeLatestCommit').textContent = latestCommit;
+      document.getElementById('updateNoticeCommitMsg').textContent = commitMsg;
+      document.getElementById('updateNoticeMirrorName').textContent = `${mirrorName} ${latency}`;
+
+      // 重置执行更新的按钮与日志区域
+      const progressBox = document.getElementById('updateExecuteProgress');
+      const btnExecute = document.getElementById('btnExecuteUpdate');
+      if (progressBox) progressBox.classList.add('hidden');
+      if (btnExecute) {
+        btnExecute.disabled = false;
+        btnExecute.innerHTML = '<i data-lucide="download-cloud" class="w-3.5 h-3.5"></i><span>立即更新</span>';
+      }
+
+      const modal = document.getElementById('updateNoticeModal');
+      modal.classList.remove('hidden');
+      setTimeout(() => modal.classList.remove('opacity-0'), 10);
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function closeUpdateNoticeModal() {
+      const modal = document.getElementById('updateNoticeModal');
+      modal.classList.add('opacity-0');
+      setTimeout(() => modal.classList.add('hidden'), 150);
+    }
+
+    function dismissUpdateNotice() {
+      if (updateStatusData?.lastCheck?.latestCommit?.hash) {
+        sessionStorage.setItem('dismiss_update_hash', updateStatusData.lastCheck.latestCommit.hash);
+      }
+      closeUpdateNoticeModal();
+    }
+
+    async function handleExecuteUpdate() {
+      const btn = document.getElementById('btnExecuteUpdate');
+      const progressBox = document.getElementById('updateExecuteProgress');
+      const statusText = document.getElementById('updateExecuteStatusText');
+      const logBox = document.getElementById('updateExecuteLog');
+
+      btn.disabled = true;
+      btn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>正在拉取...</span>';
+      progressBox.classList.remove('hidden');
+      statusText.textContent = '正在通过 GitHub 镜像加速站拉取最新提交...';
+      logBox.textContent = 'git pull origin main in progress...';
+      if (window.lucide) lucide.createIcons();
+
+      try {
+        const res = await fetch('/__gw/api/admin/update/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` }
+        });
+        const d = await res.json();
+        if (d.ok) {
+          statusText.textContent = '✓ 恭喜，系统已顺利完成最新代码拉取！';
+          logBox.textContent = d.output || 'Update successful.';
+          btn.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5"></i><span>更新完成 (刷新生效)</span>';
+          btn.onclick = () => window.location.reload();
+          btn.disabled = false;
+          // 隐藏未读徽章
+          const badgeBtn = document.getElementById('adminUpdateBadgeBtn');
+          if (badgeBtn) badgeBtn.classList.add('hidden');
+        } else {
+          statusText.textContent = `✗ 更新失败: ${d.error || '未知错误'}`;
+          logBox.textContent = d.error || '请检查镜像源连通性或稍后重试';
+          btn.innerHTML = '<i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i><span>重试拉取</span>';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        statusText.textContent = '✗ 请求超时或网络中断';
+        logBox.textContent = err.message;
+        btn.innerHTML = '<i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i><span>重试拉取</span>';
+        btn.disabled = false;
+      }
+      if (window.lucide) lucide.createIcons();
+    }
+
+    async function openUpdateSettingsModal() {
+      const modal = document.getElementById('updateSettingsModal');
+      modal.classList.remove('hidden');
+      setTimeout(() => modal.classList.remove('opacity-0'), 10);
+      if (window.lucide) lucide.createIcons();
+
+      // 获取最新配置并渲染
+      await loadUpdateSettingsData();
+    }
+
+    function closeUpdateSettingsModal() {
+      const modal = document.getElementById('updateSettingsModal');
+      modal.classList.add('opacity-0');
+      setTimeout(() => modal.classList.add('hidden'), 150);
+    }
+
+    async function loadUpdateSettingsData() {
+      try {
+        const res = await fetch('/__gw/api/admin/update/status', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) return;
+        updateStatusData = await res.json();
+
+        // 渲染基础信息
+        document.getElementById('settingsCurrentCommit').textContent = updateStatusData.currentCommit?.shortHash || '--';
+        document.getElementById('settingsRepoName').textContent = `(${updateStatusData.repoInfo?.repo || 'Cloud-Gateway'})`;
+        document.getElementById('settingsLastCheckTime').textContent = updateStatusData.lastCheck?.checkedAt 
+          ? new Date(updateStatusData.lastCheck.checkedAt).toLocaleString() 
+          : '未检测';
+
+        // 渲染策略单选
+        const mode = updateStatusData.updateSettings?.proxyMode || 'auto';
+        const radio = document.querySelector(`input[name="proxyMode"][value="${mode}"]`);
+        if (radio) radio.checked = true;
+
+        document.getElementById('settingsAutoCheck').checked = updateStatusData.updateSettings?.autoCheck !== false;
+
+        // 渲染镜像站点列表
+        renderMirrorsListUI();
+
+        // 异步后台自动测速
+        pingAllMirrorsUI();
+      } catch (e) {}
+    }
+
+    function handleProxyModeChange(mode) {
+      if (!updateStatusData) return;
+      updateStatusData.updateSettings.proxyMode = mode;
+      renderMirrorsListUI();
+    }
+
+    function renderMirrorsListUI() {
+      const container = document.getElementById('mirrorsListContainer');
+      if (!container || !updateStatusData) return;
+
+      const mirrors = updateStatusData.mirrors || [];
+      const currentSelected = updateStatusData.updateSettings?.selectedMirror || 'https://ghproxy.net';
+      const proxyMode = updateStatusData.updateSettings?.proxyMode || 'auto';
+
+      container.innerHTML = mirrors.map((m) => {
+        const ping = mirrorPingResults[m.url];
+        let pingBadge = `<span class="text-[10px] text-zinc-400 font-mono">未测速</span>`;
+        if (ping) {
+          if (ping.ok) {
+            const colorCls = ping.latency < 500 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' 
+              : (ping.latency < 1500 ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400');
+            pingBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${colorCls}">${ping.latency}ms</span>`;
+          } else {
+            pingBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400">${ping.error || '不可用'}</span>`;
+          }
+        }
+
+        const isChecked = currentSelected === m.url;
+        const isCustom = m.isCustom;
+
+        return `
+          <div class="flex items-center justify-between p-2.5 rounded-xl border ${isChecked && proxyMode === 'manual' ? 'border-blue-500 bg-blue-50/20 dark:bg-blue-950/20' : 'border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900'} transition-all text-xs">
+            <label class="flex items-center gap-2.5 flex-1 min-w-0 cursor-pointer">
+              <input type="radio" name="selectedMirrorRadio" value="${escapeHtml(m.url)}" ${isChecked ? 'checked' : ''} onchange="handleSelectMirror('${escapeHtml(m.url)}')" class="text-blue-600">
+              <div class="truncate">
+                <div class="flex items-center gap-1.5">
+                  <span class="font-medium text-[#09090b] dark:text-[#fafafa] truncate">${escapeHtml(m.name)}</span>
+                  ${m.type === 'direct' ? '<span class="text-[9px] px-1 py-0.2 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500">直连</span>' : ''}
+                  ${isCustom ? '<span class="text-[9px] px-1 py-0.2 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-600">自定义</span>' : ''}
+                </div>
+                <span class="text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa] block truncate">${escapeHtml(m.url)}</span>
+              </div>
+            </label>
+
+            <div class="flex items-center gap-2 shrink-0 ml-2">
+              ${pingBadge}
+              ${isCustom ? `
+                <button type="button" onclick="handleDeleteCustomMirror('${m.id}')" class="p-1 text-zinc-400 hover:text-rose-600 rounded">
+                  <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function handleSelectMirror(url) {
+      if (!updateStatusData) return;
+      updateStatusData.updateSettings.selectedMirror = url;
+      const manualRadio = document.querySelector('input[name="proxyMode"][value="manual"]');
+      if (manualRadio && !manualRadio.checked) {
+        manualRadio.checked = true;
+        updateStatusData.updateSettings.proxyMode = 'manual';
+      }
+      renderMirrorsListUI();
+    }
+
+    async function pingAllMirrorsUI() {
+      const btn = document.getElementById('btnPingAll');
+      if (btn) btn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>测速中...</span>';
+      if (window.lucide) lucide.createIcons();
+
+      try {
+        const res = await fetch('/__gw/api/admin/update/ping-mirrors', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          (data.results || []).forEach(r => {
+            mirrorPingResults[r.url] = { ok: r.ok, latency: r.latency, error: r.error };
+          });
+          const tip = document.getElementById('fastestMirrorTip');
+          if (tip && data.fastest && data.fastest.ok) {
+            tip.textContent = `⚡ 推荐最快: ${data.fastest.name} (${data.fastest.latency}ms)`;
+            tip.classList.remove('hidden');
+          }
+          renderMirrorsListUI();
+        }
+      } catch (e) {
+      } finally {
+        if (btn) btn.innerHTML = '<i data-lucide="activity" class="w-3.5 h-3.5"></i><span>全网自动测速</span>';
+        if (window.lucide) lucide.createIcons();
+      }
+    }
+
+    async function handleAddCustomMirror() {
+      const nameInput = document.getElementById('customMirrorName');
+      const urlInput = document.getElementById('customMirrorUrl');
+      const name = nameInput.value.trim();
+      const rawUrl = urlInput.value.trim();
+
+      if (!rawUrl) {
+        alert('请输入镜像站 URL');
+        return;
+      }
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        alert('镜像站 URL 必须以 http:// 或 https:// 开头');
+        return;
+      }
+
+      const cleanUrl = rawUrl.replace(/\/+$/, '');
+      const newMirror = {
+        id: 'custom_' + Date.now().toString(36),
+        name: name || cleanUrl,
+        url: cleanUrl
+      };
+
+      if (!updateStatusData.updateSettings.customMirrors) {
+        updateStatusData.updateSettings.customMirrors = [];
+      }
+      updateStatusData.updateSettings.customMirrors.push(newMirror);
+      updateStatusData.mirrors = updateStatusData.mirrors || [];
+      updateStatusData.mirrors.push({ ...newMirror, type: 'proxy', isCustom: true });
+
+      nameInput.value = '';
+      urlInput.value = '';
+
+      renderMirrorsListUI();
+      pingAllMirrorsUI();
+    }
+
+    function handleDeleteCustomMirror(id) {
+      if (!updateStatusData?.updateSettings?.customMirrors) return;
+      updateStatusData.updateSettings.customMirrors = updateStatusData.updateSettings.customMirrors.filter(m => m.id !== id);
+      updateStatusData.mirrors = (updateStatusData.mirrors || []).filter(m => m.id !== id);
+      renderMirrorsListUI();
+    }
+
+    async function saveUpdateSettingsFromUI() {
+      if (!updateStatusData) return;
+      const proxyMode = document.querySelector('input[name="proxyMode"]:checked')?.value || 'auto';
+      const selectedMirror = updateStatusData.updateSettings?.selectedMirror || 'https://ghproxy.net';
+      const customMirrors = updateStatusData.updateSettings?.customMirrors || [];
+      const autoCheck = document.getElementById('settingsAutoCheck').checked;
+
+      const payload = { proxyMode, selectedMirror, customMirrors, autoCheck };
+
+      const res = await fetch('/__gw/api/admin/update/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        alert('更新与镜像配置已成功保存！');
+        closeUpdateSettingsModal();
+      } else {
+        alert('保存失败，请检查网络或重试');
+      }
+    }
+
+    async function triggerManualUpdateCheck() {
+      const btn = document.getElementById('btnManualCheck');
+      btn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>正在探测...</span>';
+      if (window.lucide) lucide.createIcons();
+
+      try {
+        const res = await fetch('/__gw/api/admin/update/check', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const d = await res.json();
+        if (d.ok) {
+          document.getElementById('settingsLastCheckTime').textContent = new Date().toLocaleString();
+          handleUpdateCheckResult(d, true);
+        } else {
+          alert(`检测失败: ${d.error || '无法连接 GitHub 远程源'}`);
+        }
+      } catch (e) {
+        alert(`检测出错: ${e.message}`);
+      } finally {
+        btn.innerHTML = '<i data-lucide="search" class="w-3.5 h-3.5"></i><span>检查最新提交</span>';
+        if (window.lucide) lucide.createIcons();
       }
     }
 

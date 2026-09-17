@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const httpProxy = require('http-proxy');
+const child_process = require('child_process');
 
 const PORT = process.env.PORT || 8088;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -199,8 +200,14 @@ const DEFAULT_CONFIG = {
       enabled: true,
       order: 15,
       options: { autoSlash: true, injectBase: true, rewriteHtml: true, rewriteLocation: true, rewriteCookie: false, ws: true, changeOrigin: true }
-    },
-  ]
+    }
+  ],
+  updateSettings: {
+    autoCheck: true,
+    proxyMode: 'auto',
+    selectedMirror: 'https://ghproxy.net',
+    customMirrors: []
+  }
 };
 
 // 代理实例缓存表
@@ -214,7 +221,15 @@ function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
-      config = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+      const parsed = JSON.parse(raw);
+      config = {
+        ...DEFAULT_CONFIG,
+        ...parsed,
+        updateSettings: {
+          ...DEFAULT_CONFIG.updateSettings,
+          ...(parsed.updateSettings || {})
+        }
+      };
     } else {
       config = DEFAULT_CONFIG;
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
@@ -923,6 +938,295 @@ apiRouter.post('/admin/settings', authMiddleware, (req, res) => {
 apiRouter.post('/admin/test-target', authMiddleware, (req, res) => {
   const { target } = req.body;
   if (!target) return res.status(400).json({ error: '缺少 target 地址' });
+
+// ======================= 自动检测与 GitHub 镜像更新引擎 =======================
+const DEFAULT_GITHUB_MIRRORS = [
+  { id: 'mirror_ghproxy', name: 'GhProxy 公益加速 (推荐)', url: 'https://ghproxy.net', type: 'proxy' },
+  { id: 'mirror_ddlc', name: 'DDLC GitHub 加速', url: 'https://gh.ddlc.top', type: 'proxy' },
+  { id: 'mirror_fast', name: 'GhFast 镜像站', url: 'https://ghfast.top', type: 'proxy' },
+  { id: 'mirror_moeyy', name: 'Moeyy 萌音镜像', url: 'https://github.moeyy.xyz', type: 'proxy' },
+  { id: 'mirror_direct', name: '官方直连 (GitHub Direct)', url: 'https://github.com', type: 'direct' }
+];
+
+let lastUpdateCheckResult = null;
+let lastUpdateCheckTime = 0;
+
+function getAllMirrors() {
+  const custom = (config.updateSettings?.customMirrors || []).map((m, idx) => ({
+    id: m.id || `custom_${idx}`,
+    name: m.name || m.url,
+    url: m.url,
+    type: 'proxy',
+    isCustom: true
+  }));
+  return [...DEFAULT_GITHUB_MIRRORS, ...custom];
+}
+
+function getGitRepoInfo() {
+  try {
+    const remoteUrl = child_process.execSync('git remote get-url origin', { encoding: 'utf8', timeout: 3000 }).trim();
+    const match = remoteUrl.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(\.git)?$/i);
+    if (match) {
+      return {
+        remoteUrl,
+        owner: match[1],
+        repo: match[2],
+        fullRepo: `${match[1]}/${match[2]}`
+      };
+    }
+  } catch (e) {}
+  return {
+    remoteUrl: 'https://github.com/jinghuashang/Cloud-Gateway.git',
+    owner: 'jinghuashang',
+    repo: 'Cloud-Gateway',
+    fullRepo: 'jinghuashang/Cloud-Gateway'
+  };
+}
+
+function getLocalVersionInfo() {
+  try {
+    const hash = child_process.execSync('git rev-parse HEAD', { encoding: 'utf8', timeout: 3000 }).trim();
+    const shortHash = hash.substring(0, 7);
+    const commitMsg = child_process.execSync('git log -1 --pretty=%B', { encoding: 'utf8', timeout: 3000 }).trim();
+    const commitDate = child_process.execSync('git log -1 --pretty=%cd --date=iso', { encoding: 'utf8', timeout: 3000 }).trim();
+    return { hash, shortHash, commitMsg, commitDate, isGit: true };
+  } catch (e) {
+    return { hash: 'unknown', shortHash: 'v1.0.0', commitMsg: 'Release build', commitDate: '', isGit: false };
+  }
+}
+
+async function pingOneMirror(mirror, timeoutMs = 3500) {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    try {
+      const repoInfo = getGitRepoInfo();
+      const testUrl = mirror.type === 'direct'
+        ? 'https://github.com'
+        : `${mirror.url.replace(/\/+$/, '')}/https://raw.githubusercontent.com/${repoInfo.fullRepo}/main/package.json`;
+
+      const parsed = new URL(testUrl);
+      const client = parsed.protocol === 'https:' ? https : http;
+      const req = client.get(testUrl, {
+        headers: { 'User-Agent': 'Cloud-Gateway-Updater' },
+        timeout: timeoutMs,
+        rejectUnauthorized: false
+      }, (res) => {
+        res.resume();
+        const latency = Date.now() - start;
+        const ok = res.statusCode < 500;
+        resolve({
+          ...mirror,
+          ok,
+          status: res.statusCode,
+          latency: ok ? latency : 9999,
+          error: ok ? null : `HTTP ${res.statusCode}`
+        });
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        resolve({ ...mirror, ok: false, latency: 9999, error: '连接超时' });
+      });
+
+      req.on('error', (err) => {
+        resolve({ ...mirror, ok: false, latency: 9999, error: err.message || '连接失败' });
+      });
+    } catch (err) {
+      resolve({ ...mirror, ok: false, latency: 9999, error: err.message });
+    }
+  });
+}
+
+async function pingAllMirrors(timeoutMs = 3500) {
+  const mirrors = getAllMirrors();
+  const results = await Promise.all(mirrors.map(m => pingOneMirror(m, timeoutMs)));
+  const sorted = [...results].sort((a, b) => a.latency - b.latency);
+  const fastest = sorted.find(s => s.ok) || sorted[0];
+  return { results, fastest };
+}
+
+function resolveGitUrlWithMirror(mirrorUrl, directRepoUrl) {
+  if (!mirrorUrl || (mirrorUrl.includes('github.com') && !mirrorUrl.includes('proxy') && !mirrorUrl.includes('moeyy') && !mirrorUrl.includes('ddlc'))) {
+    return directRepoUrl;
+  }
+  const cleanMirror = mirrorUrl.replace(/\/+$/, '');
+  return `${cleanMirror}/${directRepoUrl}`;
+}
+
+async function checkGitHubUpdate(requestedMirrorUrl) {
+  const repoInfo = getGitRepoInfo();
+  const localVer = getLocalVersionInfo();
+  const settings = config.updateSettings || DEFAULT_CONFIG.updateSettings;
+
+  let activeMirrorUrl = requestedMirrorUrl;
+  let activeMirrorName = '自定义镜像';
+
+  if (!activeMirrorUrl) {
+    if (settings.proxyMode === 'direct') {
+      activeMirrorUrl = 'https://github.com';
+      activeMirrorName = '官方直连';
+    } else if (settings.proxyMode === 'manual' && settings.selectedMirror) {
+      activeMirrorUrl = settings.selectedMirror;
+      const found = getAllMirrors().find(m => m.url === activeMirrorUrl);
+      activeMirrorName = found ? found.name : activeMirrorUrl;
+    } else {
+      const { fastest } = await pingAllMirrors(2500);
+      activeMirrorUrl = fastest && fastest.ok ? fastest.url : 'https://ghproxy.net';
+      activeMirrorName = fastest && fastest.ok ? fastest.name : 'GhProxy';
+    }
+  }
+
+  const pullRemoteUrl = resolveGitUrlWithMirror(activeMirrorUrl, repoInfo.remoteUrl);
+  let remoteHash = '';
+  let checkLatency = 0;
+
+  try {
+    const start = Date.now();
+    const lsOutput = child_process.execSync(
+      `git -c http.sslVerify=false ls-remote ${pullRemoteUrl} refs/heads/main`,
+      { encoding: 'utf8', timeout: 10000 }
+    ).trim();
+    checkLatency = Date.now() - start;
+    const parts = lsOutput.split(/\s+/);
+    if (parts.length > 0 && parts[0]) {
+      remoteHash = parts[0];
+    }
+  } catch (err) {
+    try {
+      const lsOutput = child_process.execSync(
+        `git ls-remote ${repoInfo.remoteUrl} refs/heads/main`,
+        { encoding: 'utf8', timeout: 6000 }
+      ).trim();
+      const parts = lsOutput.split(/\s+/);
+      if (parts.length > 0 && parts[0]) {
+        remoteHash = parts[0];
+        activeMirrorName = '官方备用直连';
+      }
+    } catch (e2) {
+      throw new Error(`无法连接远程更新源 (${err.message})`);
+    }
+  }
+
+  if (!remoteHash) {
+    throw new Error('未获取到远程主干分支提交信息');
+  }
+
+  const hasUpdate = localVer.hash !== 'unknown' && remoteHash !== localVer.hash;
+  const latestShortHash = remoteHash.substring(0, 7);
+  let latestCommitMsg = `远程最新提交发布 (${latestShortHash})`;
+  let latestCommitDate = new Date().toISOString();
+
+  const result = {
+    hasUpdate,
+    currentCommit: localVer,
+    latestCommit: {
+      hash: remoteHash,
+      shortHash: latestShortHash,
+      commitMsg: latestCommitMsg,
+      commitDate: latestCommitDate
+    },
+    usedMirror: {
+      name: activeMirrorName,
+      url: activeMirrorUrl,
+      latency: checkLatency + 'ms'
+    },
+    checkedAt: new Date().toISOString()
+  };
+
+  lastUpdateCheckResult = result;
+  lastUpdateCheckTime = Date.now();
+  return result;
+}
+
+// 11. 管理接口：获取更新状态与配置
+apiRouter.get('/admin/update/status', authMiddleware, async (req, res) => {
+  const localVer = getLocalVersionInfo();
+  const repoInfo = getGitRepoInfo();
+  const mirrors = getAllMirrors();
+  res.json({
+    currentCommit: localVer,
+    repoInfo,
+    updateSettings: config.updateSettings || DEFAULT_CONFIG.updateSettings,
+    mirrors,
+    lastCheck: lastUpdateCheckResult,
+    hasUpdate: !!(lastUpdateCheckResult && lastUpdateCheckResult.hasUpdate)
+  });
+});
+
+// 12. 管理接口：触发检测 GitHub 最新提交
+apiRouter.post('/admin/update/check', authMiddleware, async (req, res) => {
+  try {
+    const { mirrorUrl } = req.body || {};
+    const result = await checkGitHubUpdate(mirrorUrl);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 13. 管理接口：测试所有镜像站延迟 (自动选优)
+apiRouter.post('/admin/update/ping-mirrors', authMiddleware, async (req, res) => {
+  try {
+    const pingData = await pingAllMirrors(3500);
+    res.json({ ok: true, ...pingData });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 14. 管理接口：保存更新配置 (代理模式/选定镜像/自定义镜像)
+apiRouter.post('/admin/update/settings', authMiddleware, (req, res) => {
+  const { proxyMode, selectedMirror, customMirrors, autoCheck } = req.body;
+  config.updateSettings = {
+    ...DEFAULT_CONFIG.updateSettings,
+    ...(config.updateSettings || {}),
+    proxyMode: proxyMode || config.updateSettings?.proxyMode || 'auto',
+    selectedMirror: selectedMirror || config.updateSettings?.selectedMirror || 'https://ghproxy.net',
+    customMirrors: Array.isArray(customMirrors) ? customMirrors : (config.updateSettings?.customMirrors || []),
+    autoCheck: autoCheck !== false
+  };
+  saveConfig(config);
+  res.json({ ok: true, message: '更新与镜像配置已保存', updateSettings: config.updateSettings });
+});
+
+// 15. 管理接口：执行一键拉取更新
+apiRouter.post('/admin/update/execute', authMiddleware, async (req, res) => {
+  try {
+    const repoInfo = getGitRepoInfo();
+    const settings = config.updateSettings || DEFAULT_CONFIG.updateSettings;
+    let activeMirrorUrl = req.body?.mirrorUrl || settings.selectedMirror;
+
+    if (settings.proxyMode === 'direct') {
+      activeMirrorUrl = 'https://github.com';
+    } else if (settings.proxyMode === 'auto') {
+      const { fastest } = await pingAllMirrors(2500);
+      activeMirrorUrl = fastest && fastest.ok ? fastest.url : 'https://ghproxy.net';
+    }
+
+    const pullRemoteUrl = resolveGitUrlWithMirror(activeMirrorUrl, repoInfo.remoteUrl);
+    const beforeVer = getLocalVersionInfo();
+
+    const output = child_process.execSync(
+      `git -c http.sslVerify=false pull ${pullRemoteUrl} main`,
+      { encoding: 'utf8', timeout: 60000 }
+    ).trim();
+
+    const afterVer = getLocalVersionInfo();
+    const success = beforeVer.hash !== afterVer.hash || output.includes('Already up to date');
+
+    res.json({
+      ok: true,
+      success,
+      output,
+      beforeCommit: beforeVer,
+      afterCommit: afterVer,
+      usedMirror: activeMirrorUrl,
+      needRestart: beforeVer.hash !== afterVer.hash
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
   try {
     const start = Date.now();
     const parsed = new URL(target);
