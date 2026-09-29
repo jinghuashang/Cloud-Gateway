@@ -7,7 +7,7 @@
 
 **Cloud Gateway** 是一套专为单域名/单公网 IP 环境打造的高性能**二级子路径反向代理与统一云聚合门户**。
 
-它从根本上解决了将海量异构 Web 应用（如 Next.js、React SPA、Vue Router、Vite 打包应用、Web 终端、WebSocket 实时监控、BT 下载器等）挂载到单域名二级子路径（如 `/um/`、`/omp/`、`/kuma/`、`/qb/`）时普遍面临的**静态资源 404、路由循环重定向、页面白屏、iframe 递归套娃以及资源串线漂移**等棘手难题。
+它可以将 Next.js、React SPA、Vue Router、Web 终端与 WebSocket 服务等应用挂载到管理员配置的二级子路径，帮助处理静态资源路径、重定向、会话隔离与跨服务路由问题。
 
 ---
 
@@ -20,8 +20,8 @@
   - 基于请求头 `Referer`、`Origin` 与专用会话 Cookie 特征，智能识别跨子路径的静态资源与异步 API 请求；
   - 杜绝同域名下多服务（如 Umami 与 Next.js）共享通用路径（如 `/_next/static/*`）时的相互踩踏与串线。
 - 🔀 **全自动斜杠纠偏与多重子路径折叠**
-  - 请求裸子路径（如 `/omp`）时自动执行 301/302 斜杠重定向（`/omp/`）；
-  - 入口层智能折叠畸形多重子路径（如某些前端路由误判生成的 `/kuma/kuma/dashboard` $\rightarrow$ 自动校正回 `/kuma/dashboard`）。
+  - 请求裸子路径（如 `/app`）时自动执行 301/302 斜杠重定向（`/app/`）；
+  - 入口层智能折叠畸形多重子路径（例如 `/app/app/dashboard` 自动校正回 `/app/dashboard`）。
 - 🔌 **全双工 WebSocket / PTY 终端穿透**
   - 原生支持 HTTP 升级握手（`101 Switching Protocols`）；
   - 全链路兼容 Web 终端（xterm.js）、Socket.IO 双向流与实时监控长连接。
@@ -39,23 +39,23 @@
 
 ## 🏛️ 系统架构与路由拓扑
 
-```
+```text
                            【客户端访问入口】
-                       https://cloud.example.com
+                     https://gateway.example.com
                                    │
                     ┌──────────────▼──────────────┐
                     │        Cloud Gateway        │
-                    │   (Port: 8088 / Docker)     │
                     └──────────────┬──────────────┘
                                    │
-       ┌──────────────┬────────────┼────────────┬──────────────┐
-       ▼              ▼            ▼            ▼              ▼
-     / (首页)       /um/          /omp/       /kuma/         /qb/
-  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-  │ 聚合门户 │  │  Umami   │  │Oh My Pi  │  │  Uptime  │  │qBittor-  │
-  │态势大屏  │  │ 统计分析 │  │自主智能体│  │   Kuma   │  │   rent   │
-  └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
+              ┌────────────────────┴────────────────────┐
+              ▼                                         ▼
+       /service-a/                                /service-b/
+              │                                         │
+              ▼                                         ▼
+  https://service-a.example.com          https://service-b.example.net
 ```
+
+仓库默认不包含任何代理路由。管理员可在控制台中按实际部署添加上游服务。
 
 ---
 
@@ -78,7 +78,7 @@
    ```bash
    docker compose up -d
    ```
-   网关服务将在本地 `http://0.0.0.0:8088` 启动。
+   网关服务启动后，请通过部署环境中配置的监听地址访问。
 
 ### 方式二：直接使用 Node.js 运行
 
@@ -108,36 +108,14 @@
 ```json
 {
   "siteTitle": "Cloud Gateway",
-  "siteSubtitle": "统一云聚合门户与高性能子路径反向代理",
+  "siteSubtitle": "统一云服务门户",
   "themeColor": "#3b82f6",
-  "adminPasswordHash": "$2a$10$ImJfKVA0ZweONqTDLUJrC.pHwTcViCE.H89D/2msx5auOMTVMGfN.",
-  "jwtSecret": "cloud_gateway_secret_custom_key",
-  "categories": ["全部", "常用服务", "媒体影音", "系统运维", "开发工具"],
-  "routes": [
-    {
-      "id": "route_omp",
-      "name": "Oh My Pi WebUI",
-      "category": "开发工具",
-      "icon": "terminal",
-      "description": "自主编码智能体 Oh My Pi 官方 Web 控制台与交互终端",
-      "subpath": "/omp",
-      "target": "http://127.0.0.1:8172",
-      "enabled": true,
-      "order": 1,
-      "options": {
-        "autoSlash": true,
-        "injectBase": true,
-        "rewriteHtml": true,
-        "autoPrefixSubpath": true,
-        "rewriteLocation": true,
-        "rewriteCookie": false,
-        "ws": true,
-        "changeOrigin": true
-      }
-    }
-  ]
+  "categories": ["全部"],
+  "routes": []
 }
 ```
+
+添加代理路由时，请在管理员控制台中填写您自己的子路径、上游地址和转发选项；不要将本机地址、凭据或私有配置提交到仓库。
 
 ### 🎛️ 高级代理开关解析 (`options`)
 
@@ -154,12 +132,11 @@
 
 ---
 
-## 🔒 默认密码与管理
+## 🔒 管理员安全
 
-- **默认管理员密码**：`admin123456`
-- 点击门户页面右上角右上角的齿轮/设置图标即可进入控制台登录弹窗。
-- 登录后可在页面上直接添加新路由、修改反代目标、启停服务及切换高级重写特性。
-- 生产环境建议在管理面板中及时修改初始管理员密码！
+- 请通过管理员设置配置专用密码。
+- 不要将真实凭据、内部地址或本机开发配置写入示例文件或提交到仓库。
+- 管理控制台支持在线增删改查代理路由。
 
 ---
 
