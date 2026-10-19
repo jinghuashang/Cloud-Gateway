@@ -768,8 +768,9 @@ apiRouter.post('/admin/settings', authMiddleware, (req, res) => {
     config.categories = [...new Set(cleaned)];
   }
 
-  if (newPassword !== undefined) {
-    if (typeof newPassword !== 'string' || newPassword.trim().length < 10) {
+  let passwordChanged = false;
+  if (typeof newPassword === 'string' && newPassword.length > 0) {
+    if (newPassword.trim().length < 10) {
       return res.status(400).json({ error: '新密码至少需要 10 位' });
     }
     const password = newPassword.trim();
@@ -779,13 +780,14 @@ apiRouter.post('/admin/settings', authMiddleware, (req, res) => {
     config.adminPasswordHash = bcrypt.hashSync(password, BCRYPT_ROUNDS);
     // 改密后吊销所有旧令牌
     config.tokenVersion = (config.tokenVersion || 1) + 1;
+    passwordChanged = true;
   }
 
   saveConfig(config);
   res.json({
     success: true,
     message: '全局设置已保存',
-    reauthRequired: newPassword !== undefined
+    reauthRequired: passwordChanged
   });
 });
 

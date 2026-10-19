@@ -928,6 +928,28 @@
     </div>
   </div>
 
+  <!-- ======================= 站内 Toast 通知 ======================= -->
+  <div id="toastContainer" class="fixed z-[100] top-16 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 w-[calc(100%-2rem)] sm:w-auto pointer-events-none"></div>
+
+  <!-- ======================= 站内确认对话框（替代浏览器 confirm） ======================= -->
+  <div id="confirmModal" class="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-sm p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl">
+      <div class="flex items-start gap-3">
+        <div id="confirmIconWrap" class="w-9 h-9 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0 text-[#09090b] dark:text-[#fafafa]">
+          <i data-lucide="help-circle" class="w-4 h-4"></i>
+        </div>
+        <div class="min-w-0">
+          <h3 id="confirmTitle" class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa]">确认操作</h3>
+          <p id="confirmMessage" class="mt-1 text-xs text-[#71717a] dark:text-[#a1a1aa] leading-relaxed whitespace-pre-line break-words"></p>
+        </div>
+      </div>
+      <div class="mt-4 flex items-center justify-end gap-2 text-xs">
+        <button type="button" id="confirmCancelBtn" class="px-3.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[#71717a] dark:text-[#a1a1aa] font-medium">取消</button>
+        <button type="button" id="confirmOkBtn" class="px-4 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm">确认</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ======================= 核心交互脚本 ======================= -->
   <script>
     let publicData = { siteTitle: 'Cloud Gateway', siteSubtitle: '', categories: [], routes: [] };
@@ -1323,6 +1345,139 @@
       return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
     }
 
+    // ---------------- 站内通知与确认框（替代 alert/confirm） ----------------
+
+    const TOAST_TONES = {
+      info: { icon: 'info', iconCls: 'text-sky-500', border: 'border-zinc-200/80 dark:border-zinc-700/80' },
+      success: { icon: 'check-circle-2', iconCls: 'text-emerald-500', border: 'border-emerald-200/70 dark:border-emerald-900/60' },
+      error: { icon: 'alert-triangle', iconCls: 'text-rose-500', border: 'border-rose-200/70 dark:border-rose-900/60' },
+      warning: { icon: 'alert-circle', iconCls: 'text-amber-500', border: 'border-amber-200/70 dark:border-amber-900/60' }
+    };
+
+    /**
+     * 站内 Toast：纯文本注入，自动消失，悬停暂停，最多保留 4 条。
+     * @param {string} message
+     * @param {'info'|'success'|'error'|'warning'} [type]
+     * @param {number} [duration]
+     */
+    function showToast(message, type = 'info', duration) {
+      const container = document.getElementById('toastContainer');
+      if (!container) {
+        console.log(`[toast:${type}] ${message}`);
+        return null;
+      }
+      const tone = TOAST_TONES[type] || TOAST_TONES.info;
+
+      while (container.children.length >= 4) {
+        container.firstElementChild.remove();
+      }
+
+      const el = document.createElement('div');
+      el.className = `pointer-events-auto flex items-start gap-2.5 min-w-[220px] max-w-[92vw] sm:max-w-md px-3.5 py-2.5 rounded-xl border shadow-lg backdrop-blur-md bg-white/95 dark:bg-zinc-900/95 text-xs text-[#09090b] dark:text-[#fafafa] transition-all duration-200 opacity-0 -translate-y-2 ${tone.border}`;
+      el.setAttribute('role', 'status');
+      el.innerHTML = `
+        <i data-lucide="${tone.icon}" class="w-4 h-4 mt-0.5 shrink-0 ${tone.iconCls}"></i>
+        <div class="flex-1 leading-relaxed break-words"></div>
+        <button type="button" class="p-0.5 -mr-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200" aria-label="关闭通知">
+          <i data-lucide="x" class="w-3.5 h-3.5"></i>
+        </button>`;
+      el.querySelector('div').textContent = String(message);
+      container.appendChild(el);
+      if (window.lucide) lucide.createIcons();
+
+      let timer = null;
+      let removed = false;
+      const close = () => {
+        if (removed) return;
+        removed = true;
+        if (timer) clearTimeout(timer);
+        el.classList.add('opacity-0', '-translate-y-2');
+        setTimeout(() => el.remove(), 200);
+      };
+      const arm = (ms) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(close, ms);
+      };
+      el.querySelector('button').addEventListener('click', close);
+      el.addEventListener('mouseenter', () => { if (timer) clearTimeout(timer); });
+      el.addEventListener('mouseleave', () => arm(1400));
+      arm(duration || (type === 'error' ? 5200 : 3200));
+      requestAnimationFrame(() => el.classList.remove('opacity-0', '-translate-y-2'));
+      return el;
+    }
+
+    let confirmResolver = null;
+
+    /**
+     * 站内确认对话框，返回 Promise<boolean>。
+     * @param {{title?: string, message?: string, confirmText?: string, cancelText?: string, danger?: boolean}} options
+     */
+    function showConfirmDialog(options = {}) {
+      const modal = document.getElementById('confirmModal');
+      if (!modal) {
+        console.warn('[confirm] 确认框节点缺失，已拒绝本次操作');
+        return Promise.resolve(false);
+      }
+      if (confirmResolver) {
+        // 上一个确认框仍打开时，先按取消收尾，避免悬挂 Promise
+        const previous = confirmResolver;
+        confirmResolver = null;
+        previous(false);
+      }
+
+      const title = options.title || '确认操作';
+      const message = options.message || '';
+      const danger = options.danger === true;
+      const okBtn = document.getElementById('confirmOkBtn');
+      const cancelBtn = document.getElementById('confirmCancelBtn');
+      const iconWrap = document.getElementById('confirmIconWrap');
+
+      document.getElementById('confirmTitle').textContent = title;
+      document.getElementById('confirmMessage').textContent = message;
+      okBtn.textContent = options.confirmText || '确认';
+      cancelBtn.textContent = options.cancelText || '取消';
+      okBtn.className = `px-4 py-1.5 rounded-lg font-semibold shadow-sm transition-colors ${danger
+        ? 'bg-rose-600 hover:bg-rose-700 text-white'
+        : 'bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white'}`;
+      iconWrap.className = `w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${danger
+        ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400'
+        : 'bg-zinc-100 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa]'}`;
+      iconWrap.innerHTML = `<i data-lucide="${danger ? 'alert-triangle' : 'help-circle'}" class="w-4 h-4"></i>`;
+      if (window.lucide) lucide.createIcons();
+
+      modal.classList.remove('hidden');
+      setTimeout(() => modal.classList.remove('opacity-0'), 10);
+      setTimeout(() => okBtn.focus(), 30);
+
+      return new Promise((resolve) => {
+        const finish = (value) => {
+          if (!confirmResolver) return;
+          confirmResolver = null;
+          okBtn.removeEventListener('click', onOk);
+          cancelBtn.removeEventListener('click', onCancel);
+          modal.removeEventListener('click', onBackdrop);
+          document.removeEventListener('keydown', onKey);
+          modal.classList.add('opacity-0');
+          setTimeout(() => modal.classList.add('hidden'), 150);
+          resolve(value);
+        };
+        const onOk = () => finish(true);
+        const onCancel = () => finish(false);
+        const onBackdrop = (event) => { if (event.target === modal) finish(false); };
+        const onKey = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            finish(false);
+          }
+        };
+        confirmResolver = finish;
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+        modal.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKey);
+      });
+    }
+
     function handleAdminBtnClick() {
       if (authToken) openAdminPanel();
       else openLoginModal();
@@ -1593,7 +1748,7 @@
         });
         const data = await res.json();
         if (!res.ok) {
-          alert(data.error || '画像保存失败');
+          showToast(data.error || '画像保存失败', 'error');
           return;
         }
         await loadAdminProfiles(true);
@@ -1601,7 +1756,7 @@
         closeProfileForm();
         await fetchAdminRoutes();
       } catch (err) {
-        alert('画像保存失败: ' + err.message);
+        showToast('画像保存失败: ' + err.message, 'error');
       }
     }
 
@@ -1609,9 +1764,15 @@
       const entry = profileRows[index];
       if (!entry) return;
       const inUse = (entry.usedBy || []).length > 0;
-      if (!confirm(inUse
-        ? `画像「${entry.label}」正被 ${entry.usedBy.join('、')} 使用，删除后这些路由将以纯通用模式运行。确认删除？`
-        : `确认删除画像「${entry.label}」？`)) return;
+      const confirmed = await showConfirmDialog({
+        title: '删除画像',
+        message: inUse
+          ? `画像「${entry.label}」正被 ${entry.usedBy.join('、')} 使用，删除后这些路由将以纯通用模式运行。确认删除？`
+          : `确认删除画像「${entry.label}」？`,
+        confirmText: '删除',
+        danger: true
+      });
+      if (!confirmed) return;
 
       try {
         const res = await fetch(`/__gw/api/admin/profiles/${encodeURIComponent(entry.name)}${inUse ? '?force=1' : ''}`, {
@@ -1620,14 +1781,15 @@
         });
         const data = await res.json();
         if (!res.ok) {
-          alert(data.error || '画像删除失败');
+          showToast(data.error || '画像删除失败', 'error');
           return;
         }
         await loadAdminProfiles(true);
         renderProfileManager();
         await fetchAdminRoutes();
+        showToast('画像已删除', 'success');
       } catch (err) {
-        alert('画像删除失败: ' + err.message);
+        showToast('画像删除失败: ' + err.message, 'error');
       }
     }
 
@@ -1892,11 +2054,26 @@
     }
 
     async function deleteRoute(id) {
-      if (!confirm('确认删除该路由？')) return;
-      await fetch(`/__gw/api/admin/routes/${id}`, {
+      const target = adminRoutes.find((r) => r.id === id);
+      const confirmed = await showConfirmDialog({
+        title: '删除路由',
+        message: target
+          ? `确认删除「${target.name}」（${target.subpath}）？删除后该子路径立即停止代理，且不可撤销。`
+          : '确认删除该路由？',
+        confirmText: '删除',
+        danger: true
+      });
+      if (!confirmed) return;
+      const res = await fetch(`/__gw/api/admin/routes/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
+      if (res.ok) {
+        showToast('路由已删除', 'success');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || '删除失败', 'error');
+      }
       fetchAdminRoutes();
     }
 
@@ -1990,7 +2167,7 @@
         fetchAdminRoutes();
       } else {
         const err = await res.json();
-        alert(err.error || '保存失败');
+        showToast(err.error || '保存失败', 'error');
       }
     }
 
@@ -2049,9 +2226,22 @@
         body: JSON.stringify({ siteTitle, siteSubtitle, newPassword })
       });
       if (res.ok) {
-        alert('全局设置已生效！');
+        const data = await res.json().catch(() => ({}));
         closeSettingsModal();
         fetchPublicInfo();
+        if (data.reauthRequired) {
+          // 改密会吊销旧令牌：清理本地会话并引导重新登录
+          authToken = '';
+          localStorage.removeItem('cloud_gateway_token');
+          checkAuthStatus();
+          showToast('管理员密码已修改，请重新登录', 'info', 5000);
+          openLoginModal();
+        } else {
+          showToast(data.message || '全局设置已生效', 'success');
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || '保存失败，请检查网络或重试', 'error');
       }
     }
 
@@ -2104,7 +2294,7 @@
       } else {
         if (badgeBtn) badgeBtn.classList.add('hidden');
         if (isManual) {
-          alert('当前已是最新版本，未检测到新的 GitHub 提交！');
+          showToast('当前已是最新版本，未检测到新的 GitHub 提交', 'success');
         }
       }
     }
@@ -2352,11 +2542,11 @@
       const rawUrl = urlInput.value.trim();
 
       if (!rawUrl) {
-        alert('请输入镜像站 URL');
+        showToast('请输入镜像站 URL', 'warning');
         return;
       }
       if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
-        alert('镜像站 URL 必须以 http:// 或 https:// 开头');
+        showToast('镜像站 URL 必须以 http:// 或 https:// 开头', 'warning');
         return;
       }
 
@@ -2403,10 +2593,11 @@
         body: JSON.stringify(payload)
       });
       if (res.ok) {
-        alert('更新与镜像配置已成功保存！');
         closeUpdateSettingsModal();
+        showToast('更新与镜像配置已成功保存', 'success');
       } else {
-        alert('保存失败，请检查网络或重试');
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || '保存失败，请检查网络或重试', 'error');
       }
     }
 
@@ -2429,10 +2620,10 @@
           document.getElementById('settingsLastCheckTime').textContent = new Date().toLocaleString();
           handleUpdateCheckResult(d, true);
         } else {
-          alert(`检测失败: ${d.error || '无法连接 GitHub 远程源'}`);
+          showToast(`检测失败: ${d.error || '无法连接 GitHub 远程源'}`, 'error');
         }
       } catch (e) {
-        alert(`检测出错: ${e.message}`);
+        showToast(`检测出错: ${e.message}`, 'error');
       } finally {
         btn.innerHTML = '<i data-lucide="search" class="w-3.5 h-3.5"></i><span>检查最新提交</span>';
         if (window.lucide) lucide.createIcons();
