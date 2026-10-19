@@ -3,14 +3,25 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const zlib = require('zlib');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { createProxyMiddleware } = require('http-proxy-middleware');
-const httpProxy = require('http-proxy');
 const child_process = require('child_process');
+const {
+  createProxyEngine,
+  sanitizeSubpath,
+  sanitizeOptionsInput,
+  describeProfiles,
+  sanitizeProfileInput,
+  BUILTIN_PROFILES,
+  BUILTIN_SUBPATH_PROFILES
+} = require('./lib/proxy-engine');
+const { diagnose } = require('./lib/route-doctor');
+
+// 未显式设置时按生产环境运行，避免 Express 默认错误页回显堆栈
+if (!process.env.NODE_ENV) process.env.NODE_ENV = 'production';
 
 const PORT = process.env.PORT || 8088;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -19,20 +30,30 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const SSL_CERT = process.env.SSL_CERT || path.join(__dirname, 'ssl', 'fullchain.pem');
 const SSL_KEY = process.env.SSL_KEY || path.join(__dirname, 'ssl', 'privkey.pem');
 
+/** 仅在部署于可信反代之后时，才采信 PROXY 头、X-Forwarded-* 与 X-Real-IP */
+const TRUST_PROXY_HEADERS = String(process.env.GW_TRUST_PROXY_HEADERS || '').toLowerCase() === 'true';
+/** 首次启动可由编排系统注入管理员口令（不落明文到镜像/仓库） */
+const INITIAL_ADMIN_PASSWORD = String(process.env.GW_ADMIN_PASSWORD || '');
+/** 历史版本内置的默认口令哈希：识别到即强制轮换 */
+const LEGACY_ADMIN_HASH = '$2a$10$ImJfKVA0ZweONqTDLUJrC.pHwTcViCE.H89D/2msx5auOMTVMGfN.';
+const BCRYPT_ROUNDS = 12;
+
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// 默认配置
+// 默认配置（不包含任何可用凭据：启动时由 ensureSecuritySecrets 生成并持久化）
 const DEFAULT_CONFIG = {
   siteTitle: 'Cloud Gateway',
   siteSubtitle: '统一云聚合门户与高性能子路径反向代理',
   backgroundUrl: '',
   themeColor: '#3b82f6',
-  adminPasswordHash: '$2a$10$ImJfKVA0ZweONqTDLUJrC.pHwTcViCE.H89D/2msx5auOMTVMGfN.', // 默认 admin123456
-  jwtSecret: 'cloud_gateway_secret_' + Math.random().toString(36).substring(2),
+  adminPasswordHash: '',
+  jwtSecret: '',
+  tokenVersion: 1,
   categories: ['全部', '常用服务', '媒体影音', '系统运维', '开发工具'],
   routes: [],
+  profiles: {},
   updateSettings: {
     autoCheck: true,
     proxyMode: 'auto',
@@ -41,60 +62,195 @@ const DEFAULT_CONFIG = {
   }
 };
 
-// 代理实例缓存表
-const proxyMap = new Map(); // subpath -> { route, proxy }
-// Entari 会话凭据缓存表 (解决沙箱 iframe 丢失 Cookie 导致的 401 报错)
-const entariSessionCache = new Map(); // clientIp -> sid
+// 二级目录反代引擎实例（路由画像、归属判定、响应重写均封装在 lib/proxy-engine.js）
+const engine = createProxyEngine({
+  getClientRealIp,
+  log: (message) => console.log(message)
+});
 
 // 配置管理器
 let config = DEFAULT_CONFIG;
-function loadConfig() {
+
+function isBcryptHash(value) {
+  return typeof value === 'string' && /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
+}
+
+/** 原子落盘：先写临时文件再 rename，避免中断产生半截 JSON；权限收紧到 0600 */
+function writeConfigFile() {
+  const json = JSON.stringify(config, null, 2);
+  const tmpFile = `${CONFIG_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, json, { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmpFile, CONFIG_FILE);
+  try {
+    fs.chmodSync(CONFIG_FILE, 0o600);
+  } catch (err) { /* Windows 上 chmod 语义有限，忽略 */ }
+}
+
+/** 保存配置（带上一份 .bak 备份） */
+function persistConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
-      const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
-      const parsed = JSON.parse(raw);
-      config = {
-        ...DEFAULT_CONFIG,
-        ...parsed,
-        updateSettings: {
-          ...DEFAULT_CONFIG.updateSettings,
-          ...(parsed.updateSettings || {})
-        }
-      };
-    } else {
-      config = DEFAULT_CONFIG;
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+      try {
+        fs.copyFileSync(CONFIG_FILE, `${CONFIG_FILE}.bak`);
+      } catch (err) { /* 备份失败不阻塞主流程 */ }
     }
+    writeConfigFile();
   } catch (err) {
-    console.error('[Config] Failed to load config:', err);
+    console.error('[Config] Failed to write config:', err.message);
   }
+}
+
+/**
+ * 确保凭据存在且不含历史默认值：
+ *   - jwtSecret 必须为强随机串并立即持久化（不再使用 Math.random，也不逐次重启轮换）
+ *   - 管理员口令缺失/命中历史默认哈希时，生成随机口令并只打印一次
+ * @returns {boolean} 是否有改动需要落盘
+ */
+function ensureSecuritySecrets() {
+  let mutated = false;
+
+  if (typeof config.jwtSecret !== 'string' || config.jwtSecret.length < 32 || config.jwtSecret.startsWith('cloud_gateway_secret_')) {
+    config.jwtSecret = crypto.randomBytes(48).toString('base64url');
+    mutated = true;
+  }
+
+  if (typeof config.tokenVersion !== 'number' || !Number.isFinite(config.tokenVersion)) {
+    config.tokenVersion = 1;
+    mutated = true;
+  }
+
+  const passwordMissing = !isBcryptHash(config.adminPasswordHash) || config.adminPasswordHash === LEGACY_ADMIN_HASH;
+  if (passwordMissing) {
+    const password = INITIAL_ADMIN_PASSWORD || crypto.randomBytes(18).toString('base64url');
+    config.adminPasswordHash = bcrypt.hashSync(password, BCRYPT_ROUNDS);
+    mutated = true;
+    if (INITIAL_ADMIN_PASSWORD) {
+      console.warn('[Security] 已使用环境变量 GW_ADMIN_PASSWORD 初始化管理员口令（请尽快在控制台更换并移除该变量）。');
+    } else {
+      console.warn('====================================================');
+      console.warn(' [Security] 已生成随机管理员口令（仅显示这一次）：');
+      console.warn(`            ${password}`);
+      console.warn('           请登录控制台后立即更换；该口令已写入配置文件（权限 0600）。');
+      console.warn('====================================================');
+    }
+  }
+
+  return mutated;
+}
+
+function loadConfig({ exitOnError = true } = {}) {
+  let mutated = false;
+  if (fs.existsSync(CONFIG_FILE)) {
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    } catch (err) {
+      // fail-closed：解析失败时若继续运行会回落到空配置/默认状态，等同于未授权接管入口
+      console.error(`[Config] 配置文件解析失败: ${CONFIG_FILE} (${err.message})`);
+      if (exitOnError) {
+        console.error('[Config] 出于安全考虑拒绝启动。请修复该文件，或从 config.json.bak 恢复后重启。');
+        process.exit(1);
+      }
+      return false;
+    }
+    config = {
+      ...DEFAULT_CONFIG,
+      ...parsed,
+      profiles: {
+        ...DEFAULT_CONFIG.profiles,
+        ...(parsed.profiles && typeof parsed.profiles === 'object' ? parsed.profiles : {})
+      },
+      updateSettings: {
+        ...DEFAULT_CONFIG.updateSettings,
+        ...(parsed.updateSettings || {})
+      }
+    };
+  } else {
+    config = { ...DEFAULT_CONFIG, routes: [], profiles: {} };
+    mutated = true;
+  }
+
+  if (ensureSecuritySecrets()) mutated = true;
+  if (mutated) persistConfig();
+
+  // 校验路由子路径，非法的历史配置跳过并提示（不阻塞其他路由）
+  for (const route of config.routes || []) {
+    if (sanitizeSubpath(route.subpath) === '') {
+      console.error(`[Config] 跳过非法子路径路由: ${JSON.stringify(route.subpath)} (${route.name || '未命名'})`);
+      route.enabled = false;
+    }
+  }
+
+  return true;
 }
 
 function saveConfig(newConfig) {
-  try {
-    config = newConfig;
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
-    refreshProxies();
-  } catch (err) {
-    console.error('[Config] Failed to save config:', err);
-  }
+  config = newConfig;
+  persistConfig();
+  refreshProxies();
 }
 
-function sanitizeSubpath(sp) {
-  if (!sp) return '';
-  let cleaned = sp.trim();
-  if (!cleaned.startsWith('/')) cleaned = '/' + cleaned;
-  if (cleaned.endsWith('/') && cleaned.length > 1) cleaned = cleaned.slice(0, -1);
-  return cleaned;
+/** 校验并规范化上游 target：仅 http(s)、无内嵌凭据、无片段 */
+function validateUpstreamTarget(value) {
+  if (typeof value !== 'string' || !value.trim()) return { ok: false, error: '目标地址不能为空' };
+  let parsed;
+  try {
+    parsed = new URL(value.trim());
+  } catch (err) {
+    return { ok: false, error: '目标地址不是合法 URL' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, error: '目标地址仅支持 http/https' };
+  }
+  if (parsed.username || parsed.password) {
+    return { ok: false, error: '目标地址不能内嵌用户名/密码' };
+  }
+  if (parsed.hash) {
+    return { ok: false, error: '目标地址不能包含 # 片段' };
+  }
+  return { ok: true, target: (parsed.origin + parsed.pathname).replace(/\/+$/, '') || parsed.origin };
+}
+
+/** 云元数据 / 链路本地地址黑名单（管理端出站探测用） */
+const BLOCKED_PROBE_HOSTS = new Set(['metadata.google.internal', 'metadata.goog', '169.254.169.254']);
+
+function isBlockedProbeHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  if (BLOCKED_PROBE_HOSTS.has(host)) return true;
+  if (/^169\.254\./.test(host)) return true; // IPv4 link-local（含 AWS/GCP/Azure 元数据）
+  if (host === '[fd00:ec2::254]' || host === 'fd00:ec2::254') return true;
+  return false;
+}
+
+/** 校验管理端出站 URL：仅 http(s)，禁止链路本地/云元数据地址 */
+function validateProbeUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || ''));
+  } catch (err) {
+    return { ok: false, error: 'URL 不合法' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, error: '仅支持 http/https 协议' };
+  }
+  if (isBlockedProbeHost(parsed.hostname)) {
+    return { ok: false, error: '禁止访问链路本地/云元数据地址' };
+  }
+  return { ok: true, url: parsed };
 }
 
 // 核心：真实客户端 IP 提取器
+// 默认只信任 TCP 对端地址；仅当显式设置 GW_TRUST_PROXY_HEADERS=true（部署于可信反代之后）时，
+// 才采信 PROXY 协议头与 X-Real-IP/XFF/REMOTE-HOST，避免客户端伪造来源 IP。
 function getClientRealIp(req) {
+  const socketIp = (req.socket?.remoteAddress || req.ip || '127.0.0.1').replace(/^::ffff:/, '');
+  if (!TRUST_PROXY_HEADERS) return socketIp;
+
   if (req.socket?.realClientIp) {
     return req.socket.realClientIp;
   }
   if (req.headers['x-real-ip']) {
-    return req.headers['x-real-ip'];
+    return String(req.headers['x-real-ip']).split(',')[0].trim();
   }
   const xff = req.headers['x-forwarded-for'];
   if (xff) {
@@ -104,10 +260,9 @@ function getClientRealIp(req) {
     }
   }
   if (req.headers['remote-host']) {
-    return req.headers['remote-host'];
+    return String(req.headers['remote-host']).split(',')[0].trim();
   }
-  const rawAddr = req.socket?.remoteAddress || req.ip || '127.0.0.1';
-  return rawAddr.replace(/^::ffff:/, '');
+  return socketIp;
 }
 
 // ======================= 实时流量态势与访问统计收集器 =======================
@@ -196,367 +351,28 @@ function getTrafficStats() {
   };
 }
 
-// ======================= 自动文本替换与二级目录补全引擎 =======================
-function autoPrefixSubpathText(text, subpath, targetPaths) {
-  if (!text || !subpath || !Array.isArray(targetPaths)) return text;
-  const cleanSub = subpath.replace(/^\/+|\/+$/g, '');
-  if (!cleanSub) return text;
-
-  let result = text;
-  for (const p of targetPaths) {
-    const cleanPath = p.replace(/^\/+/, '');
-    // 1. 标准单双引号包裹的绝对路径: "/admin" -> "/um/admin"
-    const quoteRegex = new RegExp(`(["'])\\/(?!${cleanSub}\\/|${cleanSub}$)${cleanPath}(?=[/"'?:#])`, 'g');
-    result = result.replace(quoteRegex, `$1/${cleanSub}/${cleanPath}`);
-
-    // 2. JSON/RSC 转义斜杠路径: "\/admin" -> "\/um\/admin"
-    const escapedRegex = new RegExp(`(["'])\\\\\\/(?!${cleanSub}\\\\/|${cleanSub}$)${cleanPath}(?=[/\\\\"\'?:#])`, 'g');
-    result = result.replace(escapedRegex, `$1\\/${cleanSub}\\/${cleanPath}`);
-
-    // 3. HTML 属性: href="/admin", src="/admin", action="/admin"
-    const attrRegex = new RegExp(`(href|src|action)=["']\\/(?!${cleanSub}\\/|${cleanSub}$)${cleanPath}(?=[/"'?:#])`, 'gi');
-    result = result.replace(attrRegex, `$1="/${cleanSub}/${cleanPath}`);
-  }
-  return result;
-}
-
-// 构建单个子目录的反向代理中间件
-function buildProxyMiddleware(route) {
-  const subpath = sanitizeSubpath(route.subpath);
-  const target = route.target;
-  const opts = route.options || {};
-
-  return createProxyMiddleware({
-    target: target,
-    changeOrigin: opts.changeOrigin !== false,
-    ws: false, // 禁用 http-proxy-middleware 隐式全局 upgrade 监听，统一由 setupUpgrade 精准独立分发
-    secure: false, // 允许代理自签 HTTPS 证书后端 (如 SyncTV)
-    selfHandleResponse: true,
-    pathRewrite: (pathname) => {
-      if (pathname === subpath || pathname.startsWith(subpath + '/')) {
-        let newPath = pathname.substring(subpath.length);
-        if (!newPath.startsWith('/')) {
-          newPath = '/' + newPath;
-        }
-        return newPath;
-      }
-      return pathname;
-    },
-    on: {
-      proxyReq: (proxyReq, req, res) => {
-        const realIp = getClientRealIp(req);
-        proxyReq.setHeader('X-Real-IP', realIp);
-        proxyReq.setHeader('REMOTE-HOST', realIp);
-
-        const existingXff = req.headers['x-forwarded-for'];
-        if (existingXff && !existingXff.includes(realIp)) {
-          proxyReq.setHeader('X-Forwarded-For', `${realIp}, ${existingXff}`);
-        } else {
-          proxyReq.setHeader('X-Forwarded-For', realIp);
-        }
-
-        proxyReq.setHeader('X-Forwarded-Prefix', subpath);
-        proxyReq.setHeader('X-Forwarded-Proto', req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http'));
-        proxyReq.setHeader('X-Forwarded-Host', req.headers['x-forwarded-host'] || req.headers.host || '');
-        proxyReq.setHeader('X-Requested-With', 'XMLHttpRequest');
-
-        // 对齐 Origin 与 Host 消除 Same-Origin 校验拒权
-        if (req.headers['origin']) {
-          try {
-            const parsedTarget = new URL(target);
-            proxyReq.setHeader('Origin', `${parsedTarget.protocol}//${parsedTarget.host}`);
-          } catch (e) {}
-        }
-        proxyReq.setHeader('Sec-Fetch-Site', 'same-origin');
-
-        // 核心兜底：针对 Entari 扩展插件 iframe 沙箱丢失 Cookie 的情况，自动补齐会话凭据
-        if (req.path.includes('/page') && (req.path.includes('/llm-chat/') || req.path.includes('/plugin-workshop/'))) {
-          const cachedSid = entariSessionCache.get(realIp);
-          if (cachedSid && !proxyReq.getHeader('cookie')?.includes('webui_sid=')) {
-            const curCookie = proxyReq.getHeader('cookie') || '';
-            proxyReq.setHeader('cookie', curCookie ? `${curCookie}; webui_sid=${cachedSid}` : `webui_sid=${cachedSid}`);
-          }
-        }
-
-        if (opts.injectBase || opts.rewriteHtml) {
-          proxyReq.setHeader('Accept-Encoding', 'identity');
-        }
-      },
-      proxyRes: (proxyRes, req, res) => {
-        // 1. 重写 Location 与 Next.js 重定向 (301/302/307/308)
-        if (opts.rewriteLocation !== false && proxyRes.headers['location']) {
-          let loc = proxyRes.headers['location'];
-          if (loc.startsWith('/') && !loc.startsWith('//')) {
-            if (!loc.startsWith(subpath + '/') && loc !== subpath) {
-              loc = subpath + loc;
-            }
-            if (loc === subpath) {
-              loc = subpath + '/';
-            }
-            proxyRes.headers['location'] = loc;
-          } else {
-            try {
-              const targetUrl = new URL(target);
-              const locUrl = new URL(loc);
-              const reqHost = (req.headers['host'] || '').split(':')[0];
-              if (locUrl.host === targetUrl.host || locUrl.hostname === reqHost) {
-                let p = locUrl.pathname;
-                if (!p.startsWith(subpath + '/') && p !== subpath) {
-                  p = subpath + p;
-                }
-                if (p === subpath) {
-                  p = subpath + '/';
-                }
-                proxyRes.headers['location'] = `${p}${locUrl.search}${locUrl.hash}`;
-              }
-            } catch (e) {}
-          }
-        }
-
-        // 1.1 同步重写 Next.js App Router 内部重定向标头
-        if (proxyRes.headers['x-nextjs-redirect']) {
-          let rloc = proxyRes.headers['x-nextjs-redirect'];
-          if (rloc.startsWith('/') && !rloc.startsWith(subpath + '/') && rloc !== subpath) {
-            proxyRes.headers['x-nextjs-redirect'] = `${subpath}${rloc}`;
-          }
-        }
-
-        // 2. Cookie 捕获与安全下发
-        if (proxyRes.headers['set-cookie']) {
-          const cookies = proxyRes.headers['set-cookie'];
-          const cookieStr = Array.isArray(cookies) ? cookies.join(';') : cookies;
-          const m = cookieStr.match(/webui_sid=([^;]+)/);
-          if (m && m[1]) {
-            const realIp = getClientRealIp(req);
-            entariSessionCache.set(realIp, m[1]);
-          }
-
-          const sanitizeCookie = (c) => {
-            if (!/SameSite=/i.test(c)) c += '; SameSite=Lax';
-            return c;
-          };
-          if (Array.isArray(cookies)) {
-            proxyRes.headers['set-cookie'] = cookies.map(sanitizeCookie);
-          } else if (typeof cookies === 'string') {
-            proxyRes.headers['set-cookie'] = sanitizeCookie(cookies);
-          }
-        }
-
-        const contentType = (proxyRes.headers['content-type'] || '').toLowerCase();
-        const isHtml = contentType.includes('text/html');
-        const isJs = contentType.includes('javascript') || contentType.includes('application/x-javascript');
-        const isJson = contentType.includes('application/json');
-        const isRsc = contentType.includes('text/x-component');
-        const isEventStream = contentType.includes('text/event-stream');
-
-        // A. 若是 SSE 流式事件推送，直接 pipe 透传
-        if (isEventStream) {
-          res.writeHead(proxyRes.statusCode, proxyRes.headers);
-          proxyRes.pipe(res);
-          return;
-        }
-
-        // B. 若既非 HTML/JS 也非 JSON/RSC，直接透传二进制流
-        if (!isHtml && !isJs && !isJson && !isRsc) {
-          res.writeHead(proxyRes.statusCode, proxyRes.headers);
-          proxyRes.pipe(res);
-          return;
-        }
-
-        const chunks = [];
-        proxyRes.on('data', (chunk) => chunks.push(chunk));
-        proxyRes.on('end', () => {
-          let buffer = Buffer.concat(chunks);
-          const encoding = (proxyRes.headers['content-encoding'] || '').toLowerCase();
-
-          function decompress(buf, cb) {
-            if (encoding === 'gzip') zlib.gunzip(buf, cb);
-            else if (encoding === 'deflate') zlib.inflate(buf, cb);
-            else if (encoding === 'br') zlib.brotliDecompress(buf, cb);
-            else cb(null, buf);
-          }
-
-          decompress(buffer, (err, decoded) => {
-            if (err) {
-              res.writeHead(proxyRes.statusCode, proxyRes.headers);
-              res.end(buffer);
-              return;
-            }
-
-            let text = decoded.toString('utf8');
-            const subPrefix = subpath.startsWith('/') ? subpath.slice(1) : subpath;
-
-            if (isHtml) {
-              // 1. 替换绝对路径标签
-              if (opts.rewriteHtml) {
-                const hrefRegex = new RegExp(`href=["']\\/(?!${subPrefix}\\/|${subPrefix}$)([^\\/][^"']*)["']`, 'gi');
-                const srcRegex = new RegExp(`src=["']\\/(?!${subPrefix}\\/|${subPrefix}$)([^\\/][^"']*)["']`, 'gi');
-                const actionRegex = new RegExp(`action=["']\\/(?!${subPrefix}\\/|${subPrefix}$)([^\\/][^"']*)["']`, 'gi');
-
-                text = text.replace(hrefRegex, `href="${subpath}/$1"`);
-                text = text.replace(srcRegex, `src="${subpath}/$1"`);
-                text = text.replace(actionRegex, `action="${subpath}/$1"`);
-              }
-              if (subpath === '/um') {
-                // 确保 inline script (如 __next_f) 里的 /_next/ 全部自愈重写为 /um/_next/
-                text = text.replace(/(["'])\/_next\//g, `$1${subpath}/_next/`);
-              }
-
-              // 2. 注入全局前端路由与历史路径垫片
-              let effectiveBase = `${subpath}/`;
-              if (subpath === '/frp' && req.path.includes('/static')) {
-                effectiveBase = '/frp/static/';
-              }
-
-              const baseTag = (subpath === '/um') ? '' : `<base href="${effectiveBase}">\n`;
-
-              const routerPolyfill = `
-  ${baseTag}<script>
-    (function() {
-      var SP = "${subpath}";
-      var origPush = history.pushState;
-      var origReplace = history.replaceState;
-      history.pushState = function(state, title, url) {
-        if (typeof url === 'string' && url.startsWith('/') && !url.startsWith(SP + '/') && url !== SP) {
-          url = SP + url;
-        }
-        return origPush.apply(this, [state, title, url]);
-      };
-      history.replaceState = function(state, title, url) {
-        if (typeof url === 'string' && url.startsWith('/') && !url.startsWith(SP + '/') && url !== SP) {
-          url = SP + url;
-        }
-        return origReplace.apply(this, [state, title, url]);
-      };
-
-      try {
-        window.localStorage.getItem('__gw_test__');
-      } catch (e) {
-        var memStorage = {};
-        Object.defineProperty(window, 'localStorage', {
-          value: {
-            getItem: function(k) { return memStorage[k] || null; },
-            setItem: function(k, v) { memStorage[k] = String(v); },
-            removeItem: function(k) { delete memStorage[k]; },
-            clear: function() { memStorage = {}; }
-          },
-          configurable: true
-        });
-      }
-    })();
-  </script>`;
-
-              if (opts.injectBase || subpath === '/um') {
-                if (/<head[^>]*>/i.test(text)) {
-                  text = text.replace(/(<head[^>]*>)/i, `$1\n${routerPolyfill}`);
-                } else if (/<html[^>]*>/i.test(text)) {
-                  text = text.replace(/(<html[^>]*>)/i, `$1\n<head>${routerPolyfill}</head>`);
-                } else {
-                  text = routerPolyfill + text;
-                }
-              }
-            } else if (isJs) {
-              // 1. 自动适配 React Router 的显式 basename
-              const reactBasenameRegex = new RegExp(`basename:\\s*["']\\/(?!${subPrefix}\\/)([^"']*)["']`, 'g');
-              text = text.replace(reactBasenameRegex, (m, p) => `basename:"${subpath}/${p}"`);
-
-              // 2. 自动适配 React Router 6 默认缺省根路径
-              text = text.replace(/basename:\s*([A-Za-z0-9_$]+)\s*=\s*["']\/["']/g, (m, varName) => `basename:${varName}="${subpath}/"`);
-
-              // 3. 自动适配 Vue Router 4 的 createWebHashHistory / createWebHistory base
-              const vueRouterRegex = /history:\s*([A-Za-z0-9_$]+)\s*\(\s*["']\/["']\s*\)/g;
-              text = text.replace(vueRouterRegex, (m, fn) => `history:${fn}("${subpath}/")`);
-
-              // 4. 自动适配特定子路径路由 (仅限 SyncTV 的 vm("/web") -> vm("/live/web"))
-              if (subpath === '/live') {
-                const customRouterRegex = new RegExp(`\\b([A-Za-z0-9_$]+)\\s*\\(\\s*["']\\/(?!${subPrefix}\\/)(web)["']\\s*\\)`, 'g');
-                text = text.replace(customRouterRegex, (m, fn, p) => `${fn}("${subpath}/${p}")`);
-              }
-              // 5. 自动放宽 iframe sandbox 权限（添加 allow-same-origin 解决 Entari 扩展插件 localStorage 安全报错）
-              text = text.replace(/sandbox:\s*["']allow-scripts\s+allow-forms["']/g, 'sandbox:"allow-scripts allow-forms allow-same-origin"');
-            }
-              // 6. 专门动态适配 Next.js App Router 子路径应用（如 Umami 白屏自愈）
-              if (subpath === '/um') {
-                text = text.replace(/(["'])\/_next\//g, `$1${subpath}/_next/`);
-                text = text.replace(/\(0,\s*([a-zA-Z0-9_$]+)\.pathHasPrefix\)\(([a-zA-Z0-9_$]+),\s*["']["']\)/g, (m, obj, arg) => `(0,${obj}.pathHasPrefix)(${arg}, "${subpath}")`);
-                text = text.replace(/function\s+n\(([a-zA-Z0-9_$]+)\)\s*\{\s*return\s+([a-zA-Z0-9_$]+)\s*\}/g, (m, a, b) => {
-                  if (a === b) {
-                    return `function n(${a}){return (typeof ${a} === "string" && ${a}.startsWith("${subpath}")) ? (${a}.slice(${subpath.length}) || "/") : ${a}}`;
-                  }
-                  return m;
-                });
-              }
-
-            // 7. 自动文本替换与二级目录全量补全引擎 (补齐 /admin, /websites, /dashboard 等，默认仅赋能 /um)
-            if (opts.autoPrefixSubpath === true || (opts.autoPrefixSubpath !== false && (subpath === '/um' || subpath === '/orp'))) {
-              const umTargets = ['admin', 'websites', 'dashboard', 'reports', 'settings', 'login', 'api', '_next'];
-              text = autoPrefixSubpathText(text, subpath, umTargets);
-            }
-
-            const modifiedBuffer = Buffer.from(text, 'utf8');
-            const newHeaders = { ...proxyRes.headers };
-            delete newHeaders['content-encoding'];
-            delete newHeaders['etag'];
-            delete newHeaders['last-modified'];
-
-            delete newHeaders['referrer-policy'];
-            newHeaders['referrer-policy'] = 'no-referrer-when-downgrade';
-
-            // 彻底移除阻碍 iframe 嵌入的安全头
-            delete newHeaders['x-frame-options'];
-            delete newHeaders['content-security-policy'];
-
-            newHeaders['cache-control'] = 'no-cache, no-store, must-revalidate';
-            newHeaders['pragma'] = 'no-cache';
-            newHeaders['expires'] = '0';
-            newHeaders['content-length'] = modifiedBuffer.length;
-
-            res.writeHead(proxyRes.statusCode, newHeaders);
-            res.end(modifiedBuffer);
-          });
-        });
-      },
-      error: (err, req, res) => {
-        console.error(`[Proxy Error] ${subpath} -> ${target}:`, err.message);
-        if (res && typeof res.status === 'function' && !res.headersSent) {
-          res.status(502).json({
-            error: 'Bad Gateway',
-            message: `无法连接到目标后端应用: ${target}`,
-            subpath: subpath,
-            detail: err.message
-          });
-        } else if (res && typeof res.destroy === 'function') {
-          res.destroy();
-        }
-      }
-    }
-  });
-}
-
-// 刷新全部代理中间件
+// ======================= 二级目录反代引擎接线 =======================
+// 反代核心能力已拆分到独立模块，便于维护与复用：
+//   lib/proxy-engine.js  路由画像、自学习签名路由、归属判定、代理中间件、WebSocket 升级
+//   lib/text-rewriter.js 编码协商、文本重写、跳转标头/Cookie 归一化、缓存策略
 function refreshProxies() {
-  proxyMap.clear();
-  const enabledRoutes = (config.routes || []).filter((r) => r.enabled);
-  for (const route of enabledRoutes) {
-    const sp = sanitizeSubpath(route.subpath);
-    if (sp && route.target) {
-      try {
-        const p = buildProxyMiddleware(route);
-        proxyMap.set(sp, { route, proxy: p });
-        console.log(`[Router Loaded] ${sp} -> ${route.target} (${route.name})`);
-      } catch (e) {
-        console.error(`[Router Error] Failed to register ${sp}:`, e);
-      }
-    }
-  }
+  engine.refreshProxies((config.routes || []).filter((r) => r.enabled), config.profiles || {});
 }
 
 loadConfig();
 refreshProxies();
 
+// 门户自身占用的路径：内部管理 API 与首页静态文件，永远不参与反代归属判定
+const PORTAL_RESERVED_PATHS = new Set(['/index.html']);
+
+const dispatcher = engine.createDispatcher({
+  onRequest: () => recordTrafficHit(),
+  isSystemPath: (pathname) => pathname.startsWith('/__gw') || PORTAL_RESERVED_PATHS.has(pathname)
+});
+
 const app = express();
-app.set('trust proxy', true);
-app.use(cors());
+app.disable('x-powered-by');
+app.set('trust proxy', TRUST_PROXY_HEADERS);
 
 // 全局请求访问日志
 app.use((req, res, next) => {
@@ -577,6 +393,38 @@ app.use((req, res, next) => {
 const apiRouter = express.Router();
 apiRouter.use(express.json());
 
+// ======================= 登录失败限速（进程内，防口令爆破/CPU 打满） =======================
+const LOGIN_WINDOW_MS = 60 * 1000;
+const LOGIN_MAX_FAILURES = 5;
+const loginFailures = new Map(); // ip -> { count, resetAt }
+
+function loginThrottled(ip) {
+  const now = Date.now();
+  const entry = loginFailures.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    loginFailures.set(ip, { count: 0, resetAt: now + LOGIN_WINDOW_MS });
+    return false;
+  }
+  return entry.count >= LOGIN_MAX_FAILURES;
+}
+
+function recordLoginFailure(ip) {
+  const now = Date.now();
+  const entry = loginFailures.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    loginFailures.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return;
+  }
+  entry.count += 1;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of loginFailures) {
+    if (entry.resetAt <= now) loginFailures.delete(ip);
+  }
+}, LOGIN_WINDOW_MS).unref();
+
 // 鉴权中间件
 function authMiddleware(req, res, next) {
   const authHeader = req.headers['authorization'] || '';
@@ -585,7 +433,10 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized', message: '请先登录管理员账号' });
   }
   try {
-    const decoded = jwt.verify(token, config.jwtSecret);
+    const decoded = jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'] });
+    if (decoded.role !== 'admin' || decoded.v !== (config.tokenVersion || 1)) {
+      return res.status(401).json({ error: 'Unauthorized', message: '登录凭证已失效，请重新登录' });
+    }
     req.admin = decoded;
     next();
   } catch (err) {
@@ -593,8 +444,8 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// 1. 公开接口：获取导航展示卡片及站点配置
-apiRouter.get('/public/info', (req, res) => {
+// 1. 公开接口：获取导航展示卡片及站点配置（仅此两处允许跨域读取）
+apiRouter.get('/public/info', cors(), (req, res) => {
   const publicRoutes = (config.routes || [])
     .filter((r) => r.enabled)
     .sort((a, b) => (a.order || 99) - (b.order || 99))
@@ -619,22 +470,46 @@ apiRouter.get('/public/info', (req, res) => {
   });
 });
 
-apiRouter.get('/public/metrics', (req, res) => {
+apiRouter.get('/public/metrics', cors(), (req, res) => {
   res.json(getTrafficStats());
 });
 
-// 2. 管理员登录
-apiRouter.post('/auth/login', (req, res) => {
-  const { password } = req.body;
-  if (!password) {
-    return res.status(400).json({ error: '请输入密码' });
+// 2. 管理员登录（限速 + 异步 bcrypt + 类型校验）
+apiRouter.post('/auth/login', async (req, res) => {
+  const ip = getClientRealIp(req);
+  if (loginThrottled(ip)) {
+    return res.status(429).json({ error: '尝试过于频繁，请 1 分钟后再试', retryAfter: 60 });
   }
-  const isMatch = bcrypt.compareSync(password, config.adminPasswordHash);
-  if (!isMatch) {
-    return res.status(401).json({ error: '管理员密码错误' });
+
+  const password = req.body && req.body.password;
+  if (typeof password !== 'string' || !password || password.length > 256) {
+    return res.status(400).json({ error: '请输入有效的管理员密码' });
   }
-  const token = jwt.sign({ role: 'admin' }, config.jwtSecret, { expiresIn: '7d' });
-  res.json({ token, message: '登录成功' });
+
+  try {
+    const isMatch = await bcrypt.compare(password, config.adminPasswordHash);
+    if (!isMatch) {
+      recordLoginFailure(ip);
+      return res.status(401).json({ error: '管理员密码错误' });
+    }
+    loginFailures.delete(ip);
+    const token = jwt.sign(
+      { role: 'admin', v: config.tokenVersion || 1 },
+      config.jwtSecret,
+      { expiresIn: '7d', algorithm: 'HS256' }
+    );
+    res.json({ token, message: '登录成功' });
+  } catch (err) {
+    console.error('[Auth] Login failed:', err.message);
+    res.status(500).json({ error: 'Internal Server Error', message: '登录处理失败，请稍后重试' });
+  }
+});
+
+// 2.1 管理员登出（吊销全部已签发令牌：单管理员模型下令牌版本自增）
+apiRouter.post('/auth/logout', authMiddleware, (req, res) => {
+  config.tokenVersion = (config.tokenVersion || 1) + 1;
+  saveConfig(config);
+  res.json({ ok: true, message: '已退出登录，所有会话令牌已失效' });
 });
 
 // 3. 检查登录状态
@@ -642,24 +517,125 @@ apiRouter.get('/auth/check', authMiddleware, (req, res) => {
   res.json({ authenticated: true });
 });
 
-// 4. 管理接口：获取完整路由列表
+// 4. 管理接口：获取完整路由列表（附带每条路由的运行时画像与自学习状态）
 apiRouter.get('/admin/routes', authMiddleware, (req, res) => {
   res.json({
     routes: config.routes || [],
-    categories: config.categories || []
+    categories: config.categories || [],
+    runtime: engine.describeRoutes()
+  });
+});
+
+// 4.1 管理接口：获取可用画像清单（内置 + 配置自定义 + 引用关系）
+apiRouter.get('/admin/profiles', authMiddleware, (req, res) => {
+  res.json({
+    ...describeProfiles(config.profiles || {}, config.routes || []),
+    subpathBindings: BUILTIN_SUBPATH_PROFILES
+  });
+});
+
+// 4.2 管理接口：新建 / 覆盖画像
+apiRouter.post('/admin/profiles', authMiddleware, (req, res) => {
+  const result = sanitizeProfileInput(req.body || {});
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  const profiles = config.profiles || {};
+  const existed = Object.prototype.hasOwnProperty.call(profiles, result.name);
+  const overridesBuiltin = Object.prototype.hasOwnProperty.call(BUILTIN_PROFILES, result.name);
+
+  config.profiles = { ...profiles, [result.name]: result.profile };
+  saveConfig(config);
+  res.json({
+    ok: true,
+    name: result.name,
+    profile: result.profile,
+    created: !existed,
+    overridesBuiltin,
+    message: `${existed ? '画像已更新' : '画像已创建'}${overridesBuiltin ? '（覆盖内置同名画像）' : ''}`
+  });
+});
+
+// 4.3 管理接口：删除画像（仍被路由引用时需 force=1）
+apiRouter.delete('/admin/profiles/:name', authMiddleware, (req, res) => {
+  const name = String(req.params.name || '').trim();
+  const profiles = config.profiles || {};
+  if (!Object.prototype.hasOwnProperty.call(profiles, name)) {
+    return res.status(404).json({ error: `画像 ${name} 不存在` });
+  }
+
+  const usedBy = (describeProfiles(profiles, config.routes || []).custom.find((p) => p.name === name) || {}).usedBy || [];
+  const force = req.query.force === '1' || (req.body && req.body.force === true);
+  if (usedBy.length && !force) {
+    return res.status(409).json({
+      error: `画像 ${name} 正被 ${usedBy.join('、')} 使用，确认后将以纯通用模式运行`,
+      usedBy
+    });
+  }
+
+  const next = { ...profiles };
+  delete next[name];
+  config.profiles = next;
+  saveConfig(config);
+  res.json({ ok: true, message: '画像已删除', usedBy });
+});
+
+// 4.4 管理接口：路由诊断（干跑体检：上游可达性 + 重写决策 + 响应头 + 技术栈 + 建议）
+apiRouter.get('/admin/route-probe', authMiddleware, async (req, res) => {
+  const subpath = sanitizeSubpath(req.query.subpath || '');
+  if (!subpath) return res.status(400).json({ error: '缺少 subpath 参数' });
+
+  const route = (config.routes || []).find((r) => sanitizeSubpath(r.subpath) === subpath && r.enabled !== false);
+  if (!route) return res.status(404).json({ error: `路由 ${subpath} 不存在或未启用` });
+
+  const runtimeInfo = engine.describeRoutes()[subpath] || {};
+  try {
+    const result = await diagnose({
+      subpath,
+      target: route.target,
+      probePath: String(req.query.path || '/'),
+      options: route.options || {},
+      profileName: runtimeInfo.profile || 'none',
+      deepEnabled: runtimeInfo.deepEnabled === true,
+      insecureTLS: (route.options || {}).insecureTLS === true,
+      inspect: (text, kind, ctx) => engine.inspectBody(subpath, text, kind, ctx)
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[Doctor] probe failed:', err.message);
+    res.json({ ok: false, subpath, probePath: String(req.query.path || '/'), error: '诊断失败，请检查上游地址与网络' });
+  }
+});
+
+// 4.5 管理接口：从磁盘重新加载配置（手工编辑 config.json 后无需重启）
+apiRouter.post('/admin/reload', authMiddleware, (req, res) => {
+  if (!loadConfig({ exitOnError: false })) {
+    return res.status(500).json({ ok: false, error: '配置文件解析失败，已保留当前运行配置；请修复后重试' });
+  }
+  refreshProxies();
+  res.json({
+    ok: true,
+    message: '配置已从磁盘重新加载',
+    routes: (config.routes || []).length,
+    profiles: Object.keys(config.profiles || {}).length
   });
 });
 
 // 5. 管理接口：创建路由
 apiRouter.post('/admin/routes', authMiddleware, (req, res) => {
-  const { name, category, icon, description, subpath, target, enabled, order, options } = req.body;
+  const { name, category, icon, description, subpath, target, enabled, order, options } = req.body || {};
   if (!name || !subpath || !target) {
     return res.status(400).json({ error: '名称、二级目录路径、目标地址为必填项' });
   }
+
   const cleanSub = sanitizeSubpath(subpath);
-  if (cleanSub === '' || cleanSub === '/__gw' || cleanSub === '/admin') {
+  if (cleanSub === '') {
+    return res.status(400).json({ error: '子路径只能包含字母/数字/点/下划线/短横线/斜杠，且不能包含点段或编码字符（长度 2-64）' });
+  }
+  if (cleanSub === '/__gw' || cleanSub === '/admin' || cleanSub.startsWith('/__gw/')) {
     return res.status(400).json({ error: '该二级目录路径为系统保留路径，不可占用' });
   }
+  const targetCheck = validateUpstreamTarget(target);
+  if (!targetCheck.ok) return res.status(400).json({ error: targetCheck.error });
 
   const existing = (config.routes || []).find((r) => sanitizeSubpath(r.subpath) === cleanSub);
   if (existing) {
@@ -667,24 +643,24 @@ apiRouter.post('/admin/routes', authMiddleware, (req, res) => {
   }
 
   const newRoute = {
-    id: 'route_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6),
-    name: name.trim(),
-    category: category || '常用服务',
-    icon: icon || 'globe',
-    description: description || '',
+    id: 'route_' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex'),
+    name: String(name).trim().slice(0, 64),
+    category: String(category || '常用服务').slice(0, 32),
+    icon: String(icon || 'globe').slice(0, 32),
+    description: String(description || '').slice(0, 200),
     subpath: cleanSub,
-    target: target.trim(),
+    target: targetCheck.target,
     enabled: enabled !== false,
     order: Number(order) || (config.routes.length + 1),
-    options: {
-      autoSlash: options?.autoSlash !== false,
-      injectBase: options?.injectBase !== false,
-      rewriteHtml: options?.rewriteHtml !== false,
-      rewriteLocation: options?.rewriteLocation !== false,
-      rewriteCookie: false,
-      ws: options?.ws !== false,
-      changeOrigin: options?.changeOrigin !== false
-    }
+    options: sanitizeOptionsInput(options, {
+      autoSlash: true,
+      injectBase: true,
+      rewriteHtml: true,
+      rewriteLocation: true,
+      rewriteCookie: true,
+      ws: true,
+      changeOrigin: true
+    })
   };
 
   config.routes.push(newRoute);
@@ -701,8 +677,20 @@ apiRouter.put('/admin/routes/:id', authMiddleware, (req, res) => {
   }
 
   const cur = config.routes[idx];
-  const { name, category, icon, description, subpath, target, enabled, order, options } = req.body;
-  const cleanSub = subpath ? sanitizeSubpath(subpath) : cur.subpath;
+  const { name, category, icon, description, subpath, target, enabled, order, options } = req.body || {};
+  const cleanSub = subpath !== undefined ? sanitizeSubpath(subpath) : sanitizeSubpath(cur.subpath);
+  if (cleanSub === '') {
+    return res.status(400).json({ error: '子路径只能包含字母/数字/点/下划线/短横线/斜杠，且不能包含点段或编码字符（长度 2-64）' });
+  }
+  if (cleanSub === '/__gw' || cleanSub === '/admin' || cleanSub.startsWith('/__gw/')) {
+    return res.status(400).json({ error: '该二级目录路径为系统保留路径，不可占用' });
+  }
+  let nextTarget = cur.target;
+  if (target !== undefined) {
+    const targetCheck = validateUpstreamTarget(target);
+    if (!targetCheck.ok) return res.status(400).json({ error: targetCheck.error });
+    nextTarget = targetCheck.target;
+  }
 
   const conflict = config.routes.find((r) => r.id !== id && sanitizeSubpath(r.subpath) === cleanSub);
   if (conflict) {
@@ -711,19 +699,15 @@ apiRouter.put('/admin/routes/:id', authMiddleware, (req, res) => {
 
   config.routes[idx] = {
     ...cur,
-    name: name ? name.trim() : cur.name,
-    category: category || cur.category,
-    icon: icon || cur.icon,
-    description: description !== undefined ? description : cur.description,
+    name: name ? String(name).trim().slice(0, 64) : cur.name,
+    category: category ? String(category).slice(0, 32) : cur.category,
+    icon: icon ? String(icon).slice(0, 32) : cur.icon,
+    description: description !== undefined ? String(description).slice(0, 200) : cur.description,
     subpath: cleanSub,
-    target: target ? target.trim() : cur.target,
+    target: nextTarget,
     enabled: enabled !== undefined ? !!enabled : cur.enabled,
     order: order !== undefined ? Number(order) : cur.order,
-    options: {
-      ...cur.options,
-      ...(options || {}),
-      rewriteCookie: false
-    }
+    options: sanitizeOptionsInput(options, cur.options || {})
   };
 
   saveConfig(config);
@@ -750,30 +734,77 @@ apiRouter.post('/admin/routes/:id/toggle', authMiddleware, (req, res) => {
 
 // 9. 管理接口：修改站点全局配置与密码
 apiRouter.post('/admin/settings', authMiddleware, (req, res) => {
-  const { siteTitle, siteSubtitle, backgroundUrl, themeColor, categories, newPassword } = req.body;
-  if (siteTitle) config.siteTitle = siteTitle;
-  if (siteSubtitle !== undefined) config.siteSubtitle = siteSubtitle;
-  if (backgroundUrl !== undefined) config.backgroundUrl = backgroundUrl;
-  if (themeColor) config.themeColor = themeColor;
-  if (Array.isArray(categories) && categories.length > 0) config.categories = categories;
+  const { siteTitle, siteSubtitle, backgroundUrl, themeColor, categories, newPassword } = req.body || {};
 
-  if (newPassword && newPassword.trim().length >= 6) {
-    config.adminPasswordHash = bcrypt.hashSync(newPassword.trim(), 10);
+  const cleanText = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : undefined);
+
+  const nextTitle = cleanText(siteTitle, 64);
+  if (nextTitle) config.siteTitle = nextTitle;
+  const nextSubtitle = cleanText(siteSubtitle, 120);
+  if (nextSubtitle !== undefined) config.siteSubtitle = nextSubtitle;
+
+  if (backgroundUrl !== undefined) {
+    const url = cleanText(backgroundUrl, 512) || '';
+    if (url && !/^https?:\/\//i.test(url)) {
+      return res.status(400).json({ error: '背景图地址必须为空或 http(s) URL' });
+    }
+    config.backgroundUrl = url;
+  }
+  if (themeColor !== undefined) {
+    const color = cleanText(themeColor, 32) || '';
+    if (color && !/^#[0-9a-fA-F]{3,8}$/.test(color)) {
+      return res.status(400).json({ error: '主色必须是 #RGB / #RRGGBB 形式' });
+    }
+    if (color) config.themeColor = color;
+  }
+  if (categories !== undefined) {
+    if (!Array.isArray(categories) || categories.length === 0 || categories.length > 20) {
+      return res.status(400).json({ error: '分类需为 1-20 项数组' });
+    }
+    const cleaned = categories
+      .map((c) => (typeof c === 'string' ? c.trim() : ''))
+      .filter((c) => c && c.length <= 32 && !/[<>&"']/.test(c));
+    if (!cleaned.length) return res.status(400).json({ error: '分类名称不合法（禁止 < > & " \' 且长度 ≤32）' });
+    config.categories = [...new Set(cleaned)];
+  }
+
+  if (newPassword !== undefined) {
+    if (typeof newPassword !== 'string' || newPassword.trim().length < 10) {
+      return res.status(400).json({ error: '新密码至少需要 10 位' });
+    }
+    const password = newPassword.trim();
+    if (password === 'admin123456') {
+      return res.status(400).json({ error: '不允许使用历史默认口令' });
+    }
+    config.adminPasswordHash = bcrypt.hashSync(password, BCRYPT_ROUNDS);
+    // 改密后吊销所有旧令牌
+    config.tokenVersion = (config.tokenVersion || 1) + 1;
   }
 
   saveConfig(config);
-  res.json({ success: true, message: '全局设置已保存' });
+  res.json({
+    success: true,
+    message: '全局设置已保存',
+    reauthRequired: newPassword !== undefined
+  });
 });
 
 // 10. 管理接口：测试 target 连通性
 apiRouter.post('/admin/test-target', authMiddleware, (req, res) => {
-  const { target } = req.body;
+  const { target, insecureTLS } = req.body || {};
   if (!target) return res.status(400).json({ error: '缺少 target 地址' });
+
+  const checked = validateProbeUrl(target);
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
+
   try {
     const start = Date.now();
-    const parsed = new URL(target);
-    const client = parsed.protocol === 'https:' ? require('https') : require('http');
-    const testReq = client.get(target, { timeout: 3500, rejectUnauthorized: false }, (testRes) => {
+    const client = checked.url.protocol === 'https:' ? https : http;
+    const testReq = client.get(checked.url.toString(), {
+      timeout: 3500,
+      rejectUnauthorized: insecureTLS !== true
+    }, (testRes) => {
+      testRes.resume();
       res.json({
         ok: true,
         statusCode: testRes.statusCode,
@@ -781,14 +812,14 @@ apiRouter.post('/admin/test-target', authMiddleware, (req, res) => {
       });
     });
     testReq.on('error', (err) => {
-      res.json({ ok: false, error: err.message });
+      res.json({ ok: false, error: err.code || '连接失败' });
     });
     testReq.on('timeout', () => {
       testReq.destroy();
       res.json({ ok: false, error: '连接超时 (3.5秒)' });
     });
   } catch (err) {
-    res.json({ ok: false, error: err.message });
+    res.json({ ok: false, error: '连接失败' });
   }
 });
 
@@ -805,13 +836,19 @@ let lastUpdateCheckResult = null;
 let lastUpdateCheckTime = 0;
 
 function getAllMirrors() {
-  const custom = (config.updateSettings?.customMirrors || []).map((m, idx) => ({
-    id: m.id || `custom_${idx}`,
-    name: m.name || m.url,
-    url: m.url,
-    type: 'proxy',
-    isCustom: true
-  }));
+  const custom = (config.updateSettings?.customMirrors || [])
+    .map((m, idx) => ({
+      id: String(m.id || `custom_${idx}`).slice(0, 32),
+      name: String(m.name || m.url || '').slice(0, 64),
+      url: String(m.url || ''),
+      type: 'proxy',
+      isCustom: true
+    }))
+    // 只保留合法的 https 镜像，避免历史脏配置进入出站请求
+    .filter((m) => {
+      const checked = validateProbeUrl(m.url);
+      return checked.ok && checked.url.protocol === 'https:';
+    });
   return [...DEFAULT_GITHUB_MIRRORS, ...custom];
 }
 
@@ -843,14 +880,19 @@ async function pingOneMirror(mirror, timeoutMs = 3500) {
       const repoInfo = getGitRepoInfo();
       const testUrl = mirror.type === 'direct'
         ? 'https://github.com'
-        : `${mirror.url.replace(/\/+$/, '')}/https://raw.githubusercontent.com/${repoInfo.fullRepo}/main/package.json`;
+        : `${String(mirror.url).replace(/\/+$/, '')}/https://raw.githubusercontent.com/${repoInfo.fullRepo}/main/package.json`;
 
-      const parsed = new URL(testUrl);
-      const client = parsed.protocol === 'https:' ? https : http;
-      const req = client.get(testUrl, {
+      const checked = validateProbeUrl(testUrl);
+      if (!checked.ok) {
+        resolve({ ...mirror, ok: false, latency: 9999, error: checked.error });
+        return;
+      }
+
+      const client = checked.url.protocol === 'https:' ? https : http;
+      const req = client.get(checked.url.toString(), {
         headers: { 'User-Agent': 'Cloud-Gateway-Updater' },
         timeout: timeoutMs,
-        rejectUnauthorized: false
+        rejectUnauthorized: true
       }, (res) => {
         res.resume();
         const latency = Date.now() - start;
@@ -870,10 +912,10 @@ async function pingOneMirror(mirror, timeoutMs = 3500) {
       });
 
       req.on('error', (err) => {
-        resolve({ ...mirror, ok: false, latency: 9999, error: err.message || '连接失败' });
+        resolve({ ...mirror, ok: false, latency: 9999, error: err.code || '连接失败' });
       });
     } catch (err) {
-      resolve({ ...mirror, ok: false, latency: 9999, error: err.message });
+      resolve({ ...mirror, ok: false, latency: 9999, error: '连接失败' });
     }
   });
 }
@@ -974,14 +1016,18 @@ async function fetchRemoteCommitSmartHttp(mirrorUrl, fullRepo = 'jinghuashang/Cl
   const isDirect = !mirrorUrl || (mirrorUrl.includes('github.com') && !mirrorUrl.includes('proxy') && !mirrorUrl.includes('moeyy') && !mirrorUrl.includes('ddlc'));
   const smartUrl = isDirect
     ? `https://github.com/${fullRepo}.git/info/refs?service=git-upload-pack`
-    : `${mirrorUrl.replace(/\/+$/, '')}/https://github.com/${fullRepo}.git/info/refs?service=git-upload-pack`;
+    : `${String(mirrorUrl).replace(/\/+$/, '')}/https://github.com/${fullRepo}.git/info/refs?service=git-upload-pack`;
+
+  const checked = validateProbeUrl(smartUrl);
+  if (!checked.ok) throw new Error(checked.error);
 
   const start = Date.now();
-  const res = await fetch(smartUrl, {
+  const res = await fetch(checked.url.toString(), {
     headers: {
       'User-Agent': 'git/2.40.0',
       'Accept': '*/*'
     },
+    redirect: 'manual', // 禁止跟随跳转，避免被镜像指向内网地址
     signal: AbortSignal.timeout(timeoutMs)
   });
 
@@ -1006,15 +1052,18 @@ async function fetchRemoteCommitSmartHttp(mirrorUrl, fullRepo = 'jinghuashang/Cl
 async function fetchCommitDetail(sha, mirrorUrl, fullRepo = 'jinghuashang/Cloud-Gateway') {
   const isDirect = !mirrorUrl || (mirrorUrl.includes('github.com') && !mirrorUrl.includes('proxy') && !mirrorUrl.includes('moeyy') && !mirrorUrl.includes('ddlc'));
   const candidateUrls = [
-    isDirect ? `https://api.github.com/repos/${fullRepo}/commits/${sha}` : `${mirrorUrl.replace(/\/+$/, '')}/https://api.github.com/repos/${fullRepo}/commits/${sha}`,
+    isDirect ? `https://api.github.com/repos/${fullRepo}/commits/${sha}` : `${String(mirrorUrl).replace(/\/+$/, '')}/https://api.github.com/repos/${fullRepo}/commits/${sha}`,
     `https://api.github.com/repos/${fullRepo}/commits/${sha}`,
     `https://ghproxy.net/https://api.github.com/repos/${fullRepo}/commits/${sha}`
   ];
 
   for (const url of candidateUrls) {
+    const checked = validateProbeUrl(url);
+    if (!checked.ok) continue;
     try {
-      const res = await fetch(url, {
+      const res = await fetch(checked.url.toString(), {
         headers: { 'User-Agent': 'Cloud-Gateway-Updater' },
+        redirect: 'manual',
         signal: AbortSignal.timeout(3500)
       });
       if (res.ok) {
@@ -1034,6 +1083,29 @@ async function fetchCommitDetail(sha, mirrorUrl, fullRepo = 'jinghuashang/Cloud-
     commitDate: '',
     author: ''
   };
+}
+
+/**
+ * 把镜像地址 + 仓库远端地址组合为 git 可用的拉取 URL。
+ * 仅允许 https，并做主机黑名单校验；返回值用于 execFile 参数（不经过 shell）。
+ */
+function resolveGitUrlWithMirror(mirrorUrl, remoteUrl) {
+  const remote = validateProbeUrl(remoteUrl);
+  if (!remote.ok) throw new Error(`仓库远端地址非法: ${remote.error}`);
+  if (remote.url.protocol !== 'https:') throw new Error('仓库远端地址必须为 https');
+
+  const rawMirror = String(mirrorUrl || '').trim();
+  if (!rawMirror) throw new Error('镜像地址为空');
+  const mirror = validateProbeUrl(rawMirror);
+  if (!mirror.ok) throw new Error(`镜像地址非法: ${mirror.error}`);
+  if (mirror.url.protocol !== 'https:') throw new Error('镜像地址必须为 https');
+
+  // 官方直连
+  if (mirror.url.hostname === 'github.com') return remote.url.toString();
+
+  // 镜像站约定：<mirror>/https://github.com/<owner>/<repo>.git
+  const base = `${mirror.url.origin}${mirror.url.pathname.replace(/\/+$/, '')}`;
+  return `${base}/${remote.url.origin}${remote.url.pathname}`;
 }
 
 async function checkGitHubUpdate(requestedMirrorUrl) {
@@ -1085,7 +1157,8 @@ async function checkGitHubUpdate(requestedMirrorUrl) {
   }
 
   if (!remoteCommitResult) {
-    throw new Error(`无法连接远程更新源: ${lastError?.message || '所有镜像节点均无响应'}`);
+    console.error('[Updater] 无法连接远程更新源:', lastError?.message || '所有镜像节点均无响应');
+    throw new Error('无法连接远程更新源，请检查镜像配置或网络');
   }
 
   const remoteHash = remoteCommitResult.hash;
@@ -1135,6 +1208,12 @@ apiRouter.get('/admin/update/status', authMiddleware, async (req, res) => {
 apiRouter.post('/admin/update/check', authMiddleware, async (req, res) => {
   try {
     const { mirrorUrl } = req.body || {};
+    if (mirrorUrl !== undefined && mirrorUrl !== '') {
+      const checked = validateProbeUrl(mirrorUrl);
+      if (!checked.ok || checked.url.protocol !== 'https:') {
+        return res.status(400).json({ ok: false, error: '镜像地址必须为合法的 https URL' });
+      }
+    }
     const result = await checkGitHubUpdate(mirrorUrl);
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -1154,14 +1233,44 @@ apiRouter.post('/admin/update/ping-mirrors', authMiddleware, async (req, res) =>
 
 // 14. 管理接口：保存更新配置 (代理模式/选定镜像/自定义镜像)
 apiRouter.post('/admin/update/settings', authMiddleware, (req, res) => {
-  const { proxyMode, selectedMirror, customMirrors, autoCheck } = req.body;
+  const { proxyMode, selectedMirror, customMirrors, autoCheck, allowInsecureGit } = req.body || {};
+  const modes = new Set(['auto', 'direct', 'manual']);
+
+  if (proxyMode !== undefined && !modes.has(String(proxyMode))) {
+    return res.status(400).json({ error: 'proxyMode 只能是 auto / direct / manual' });
+  }
+  if (selectedMirror !== undefined && selectedMirror !== '') {
+    const checked = validateProbeUrl(selectedMirror);
+    if (!checked.ok || checked.url.protocol !== 'https:') {
+      return res.status(400).json({ error: '镜像地址必须为合法的 https URL' });
+    }
+  }
+
+  let nextCustom = config.updateSettings?.customMirrors || [];
+  if (Array.isArray(customMirrors)) {
+    nextCustom = [];
+    for (const item of customMirrors.slice(0, 20)) {
+      const url = String((item && item.url) || '').trim();
+      const checked = validateProbeUrl(url);
+      if (!checked.ok || checked.url.protocol !== 'https:') {
+        return res.status(400).json({ error: `自定义镜像地址非法: ${url || '(空)'}` });
+      }
+      nextCustom.push({
+        id: item.id ? String(item.id).slice(0, 32) : undefined,
+        name: item.name ? String(item.name).slice(0, 64) : checked.url.hostname,
+        url: checked.url.toString()
+      });
+    }
+  }
+
   config.updateSettings = {
     ...DEFAULT_CONFIG.updateSettings,
     ...(config.updateSettings || {}),
     proxyMode: proxyMode || config.updateSettings?.proxyMode || 'auto',
     selectedMirror: selectedMirror || config.updateSettings?.selectedMirror || 'https://ghproxy.net',
-    customMirrors: Array.isArray(customMirrors) ? customMirrors : (config.updateSettings?.customMirrors || []),
-    autoCheck: autoCheck !== false
+    customMirrors: nextCustom,
+    autoCheck: autoCheck !== false,
+    allowInsecureGit: allowInsecureGit === true
   };
   saveConfig(config);
   res.json({ ok: true, message: '更新与镜像配置已保存', updateSettings: config.updateSettings });
@@ -1181,12 +1290,17 @@ apiRouter.post('/admin/update/execute', authMiddleware, async (req, res) => {
       activeMirrorUrl = fastest && fastest.ok ? fastest.url : 'https://ghproxy.net';
     }
 
-    const pullRemoteUrl = resolveGitUrlWithMirror(activeMirrorUrl, repoInfo.remoteUrl);
+    let pullRemoteUrl;
+    try {
+      pullRemoteUrl = resolveGitUrlWithMirror(activeMirrorUrl, repoInfo.remoteUrl);
+    } catch (err) {
+      return res.status(400).json({ ok: false, error: err.message });
+    }
     const beforeVer = getLocalVersionInfo();
 
     let hasGitCli = false;
     try {
-      child_process.execSync('git --version', { timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] });
+      child_process.execFileSync('git', ['--version'], { timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] });
       hasGitCli = true;
     } catch (e) {
       hasGitCli = false;
@@ -1199,10 +1313,19 @@ apiRouter.post('/admin/update/execute', authMiddleware, async (req, res) => {
       });
     }
 
-    const output = child_process.execSync(
-      `git -c http.sslVerify=false pull ${pullRemoteUrl} main`,
-      { encoding: 'utf8', timeout: 60000 }
-    ).trim();
+    // 使用 execFile 参数数组，绝不经过 shell；TLS 校验默认开启，仅按更新配置显式放宽
+    const gitArgs = ['pull', pullRemoteUrl, 'main'];
+    if (settings.allowInsecureGit === true) {
+      gitArgs.unshift('-c', 'http.sslVerify=false');
+    }
+    let output;
+    try {
+      output = child_process.execFileSync('git', gitArgs, { encoding: 'utf8', timeout: 60000 }).trim();
+    } catch (gitErr) {
+      const detail = String(gitErr.stderr || gitErr.message || '').trim().split('\n').slice(0, 6).join('\n');
+      console.error('[Updater] git pull failed:', detail);
+      return res.status(502).json({ ok: false, error: '拉取更新失败，请检查网络/镜像或容器内 git 权限', detail });
+    }
 
     const afterVer = getLocalVersionInfo();
     const success = beforeVer.hash !== afterVer.hash || output.includes('Already up to date');
@@ -1226,203 +1349,30 @@ app.use('/__gw/api', apiRouter);
 app.get('/api/public/info', (req, res) => res.redirect(307, '/__gw/api/public/info'));
 
 // ======================= 核心调度与反代引擎 =======================
+// 调度逻辑全部下沉到 lib/proxy-engine.js：
+//   多重前缀折叠 -> 根路径漂移纠正 -> 归属判定(显式/Referer/签名/Cookie) -> 斜杠纠偏 -> 转发
+app.use(dispatcher);
+
+// 门户自身的安全响应头（不影响被代理应用；反代响应的安全头由路由选项控制）
+const PORTAL_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'self'",
+  "base-uri 'self'",
+  "form-action 'self'"
+].join('; ');
+
 app.use((req, res, next) => {
-  recordTrafficHit();
-  // 优先拦截属于 Umami 的 admin 路径：若访问 /admin/users 等或来自 /um 页面，302 自动重定向至 /um/admin
-  if (
-    req.path.startsWith('/admin/') ||
-    (req.path === '/admin' && req.headers['referer']?.includes('/um'))
-  ) {
-    const qs = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-    return res.redirect(302, `/um${req.path}${qs}`);
+  if (req.path === '/' || req.path === '/index.html') {
+    res.setHeader('Content-Security-Policy', PORTAL_CSP);
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
   }
-  if (req.path.startsWith('/__gw') || req.path === '/admin') {
-    return next();
-  }
-  // 0. 核心自愈：自动消除任何客户端路由或重定向产生的多重二级目录重复 (如 /kuma/kuma/... 自动 301 矫正为 /kuma/...)
-  for (const [subpath] of proxyMap.entries()) {
-    const doubleSub = `${subpath}${subpath}`;
-    if (req.path === doubleSub || req.path.startsWith(`${doubleSub}/`)) {
-      let cleanPath = req.path;
-      while (cleanPath.startsWith(doubleSub)) {
-        cleanPath = subpath + cleanPath.substring(doubleSub.length);
-      }
-      const qs = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-      return res.redirect(301, `${cleanPath}${qs}`);
-    }
-  }
-
-  // 1. 显式路径匹配
-  let matchedEntry = null;
-  let matchedPrefix = '';
-
-  for (const [subpath, entry] of proxyMap.entries()) {
-    if (req.path === subpath || req.path.startsWith(subpath + '/')) {
-      if (subpath.length > matchedPrefix.length) {
-        matchedPrefix = subpath;
-        matchedEntry = entry;
-      }
-    }
-  }
-
-  if (matchedEntry) {
-    const { route, proxy } = matchedEntry;
-
-    if (req.path === route.subpath && route.options.autoSlash !== false) {
-      const qs = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-      return res.redirect(301, route.subpath + '/' + qs);
-    }
-
-    res.setHeader('Set-Cookie', `__gw_active_subpath=${encodeURIComponent(route.subpath)}; Path=/; SameSite=Lax`);
-    return proxy(req, res, next);
-  }
-
-  // 2. 核心大招：精准特征路由签名（Signature Routing）
-  if (req.path !== '/') {
-    // 0. 最高优先级：基于 Referer 来源的严格上下文反代 (在 Entari / Umami 等系统内部时，发出的相对 API 绝不串扰)
-    const referer = req.headers['referer'] || '';
-    if (referer) {
-      try {
-        const refUrl = new URL(referer);
-        for (const [subpath, entry] of proxyMap.entries()) {
-          if (refUrl.pathname === subpath || refUrl.pathname.startsWith(subpath + '/')) {
-            if (!req.path.startsWith('/__gw')) {
-              return entry.proxy(req, res, next);
-            }
-          }
-        }
-      } catch (e) {}
-    }
-
-    // 智能路由：/api/auth/login 与 /api/auth/check (彻底杜绝 Entari 登录被 Umami 劫持报 400)
-    if (req.path === '/api/auth/login') {
-      if (req.headers['referer']?.includes('/um') && proxyMap.has('/um')) {
-        return proxyMap.get('/um').proxy(req, res, next);
-      }
-      if (proxyMap.has('/en')) {
-        return proxyMap.get('/en').proxy(req, res, next);
-      }
-    }
-    if (req.path === '/api/auth/check' && proxyMap.has('/en')) {
-      return proxyMap.get('/en').proxy(req, res, next);
-    }
-
-    // A. v2rayA 专属特征接口（绝对归属 /v2）
-    if (req.path.startsWith('/api/outbounds') || req.path.startsWith('/api/touch') || 
-        req.path.startsWith('/api/routing') || req.path.startsWith('/api/inbounds') ||
-        req.path.startsWith('/api/subscribe') || req.path.startsWith('/api/message')) {
-      if (proxyMap.has('/v2')) {
-        return proxyMap.get('/v2').proxy(req, res, next);
-      }
-    }
-
-    // B. New API 专属特征接口（绝对归属 /newapi）
-    if (req.path.startsWith('/api/status') || req.path.startsWith('/api/notice') ||
-        req.path.startsWith('/api/user/self') || req.path.startsWith('/api/channel') ||
-        req.path.startsWith('/api/token')) {
-      if (proxyMap.has('/newapi')) {
-        return proxyMap.get('/newapi').proxy(req, res, next);
-      }
-    }
-
-    // C. FRP 控制台专属特征接口（绝对归属 /frp）
-    if (req.path.startsWith('/api/proxy') || req.path.startsWith('/api/serverinfo')) {
-      if (proxyMap.has('/frp')) {
-        return proxyMap.get('/frp').proxy(req, res, next);
-      }
-    }
-
-    // D. Entari 专属特征接口与扩展插件页面（表情库管理、LLM 会话、插件工坊绝对归属 /en）
-    if (req.path.startsWith('/api/llm-chat') || 
-        req.path.startsWith('/api/plugin-workshop') ||
-        req.path.startsWith('/api/extensions') || 
-        req.path.startsWith('/api/menus') ||
-        req.path.startsWith('/api/health') || 
-        req.path.startsWith('/api/marketplace') ||
-        req.path.startsWith('/extension/')) {
-      if (proxyMap.has('/en')) {
-        return proxyMap.get('/en').proxy(req, res, next);
-      }
-    }
-    // E. 根路径漂移自动修正：若直接访问属于 Umami 的页面路径，302 自动矫正回 /um/ 前缀！
-    if (
-      req.path === '/websites' || req.path.startsWith('/websites/') ||
-      req.path === '/dashboard' || req.path.startsWith('/dashboard/') ||
-      req.path === '/reports' || req.path.startsWith('/reports/') ||
-      req.path === '/settings' || req.path.startsWith('/settings/') ||
-      req.path === '/login' || req.path.startsWith('/login/') ||
-      req.path.startsWith('/admin/') ||
-      (req.path === '/admin' && req.headers['referer']?.includes('/um'))
-    ) {
-      const qs = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-      return res.redirect(302, `/um${req.path}${qs}`);
-    }
-
-    // F. Umami (Next.js) 专属特征接口与静态资源（/_next/、/api/auth、/api/admin 等绝对代理归属 /um）
-    if (
-      req.path.startsWith('/_next/') ||
-      req.path.startsWith('/api/admin') ||
-      req.path.startsWith('/api/users') ||
-      req.path.startsWith('/api/me') ||
-      req.path.startsWith('/api/config') ||
-      req.path.startsWith('/api/auth/verify') ||
-      req.path.startsWith('/api/auth/subscription') ||
-      req.path.startsWith('/api/auth/sso') ||
-      req.path.startsWith('/api/websites') ||
-      req.path.startsWith('/api/send') ||
-      req.path.startsWith('/api/reports') ||
-      req.path.startsWith('/api/teams') ||
-      req.path.startsWith('/api/dashboard') ||
-      req.path.startsWith('/api/realtime') ||
-      req.path.startsWith('/api/record') ||
-      req.path.startsWith('/api/share') ||
-      req.path.startsWith('/api/2fa') ||
-      req.path.startsWith('/api/batch') ||
-      req.path.startsWith('/api/heartbeat')
-    ) {
-      if (proxyMap.has('/um')) {
-        return proxyMap.get('/um').proxy(req, res, next);
-      }
-    }
-
-    // G. Uptime Kuma (Socket.IO 与状态更新通道绝对代理归属 /kuma)
-    if (req.path.startsWith('/socket.io/')) {
-      if (proxyMap.has('/kuma')) {
-        return proxyMap.get('/kuma').proxy(req, res, next);
-      }
-    }
-
-    // 3. 基于 Referer 来源的严格上下文匹配（优先于全局 Cookie）
-    let targetSubpath = null;
-    // 复用上方 referer
-    if (referer) {
-      try {
-        const refUrl = new URL(referer);
-        for (const [subpath, entry] of proxyMap.entries()) {
-          if (refUrl.pathname === subpath || refUrl.pathname.startsWith(subpath + '/')) {
-            targetSubpath = subpath;
-            break;
-          }
-        }
-      } catch (e) {}
-    }
-
-    // 4. 兜底匹配 Cookie
-    if (!targetSubpath && req.headers['cookie']) {
-      const match = req.headers['cookie'].match(/__gw_active_subpath=([^;]+)/);
-      if (match && match[1]) {
-        const cookieSp = decodeURIComponent(match[1]);
-        if (proxyMap.has(cookieSp)) {
-          targetSubpath = cookieSp;
-        }
-      }
-    }
-
-    if (targetSubpath && proxyMap.has(targetSubpath)) {
-      return proxyMap.get(targetSubpath).proxy(req, res, next);
-    }
-  }
-
   next();
 });
 
@@ -1430,7 +1380,22 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('*', (req, res) => {
+  res.setHeader('Content-Security-Policy', PORTAL_CSP);
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 统一错误处理：生产环境不回显堆栈，仅返回 requestId 供日志关联
+app.use((err, req, res, next) => {
+  const requestId = crypto.randomBytes(6).toString('hex');
+  console.error(`[Unhandled] id=${requestId} ${req.method} ${req.originalUrl || req.url}:`, err && err.stack ? err.stack.split('\n').slice(0, 4).join('\n') : err);
+  if (res.headersSent) {
+    if (typeof res.destroy === 'function') res.destroy();
+    return;
+  }
+  res.status(500).json({ error: 'Internal Server Error', message: '服务器内部错误', requestId });
 });
 
 // ======================= 双协议与 WebSocket 监听层 =======================
@@ -1449,101 +1414,26 @@ if (fs.existsSync(SSL_CERT) && fs.existsSync(SSL_KEY)) {
   }
 }
 
-const standaloneWsProxy = httpProxy.createProxyServer({
-  ws: true,
-  changeOrigin: true,
-  secure: false
-});
-standaloneWsProxy.on('error', (err, req, socket) => {
-  console.error('[WS Proxy Error]', err.message);
-  try { socket.destroy(); } catch (e) {}
-});
-// WebSocket 穿透升级处理
-function setupUpgrade(serverInstance) {
-  if (!serverInstance) return;
-  serverInstance.on('upgrade', (req, socket, head) => {
-    const pathname = req.url ? new URL(req.url, 'http://localhost').pathname : '';
-
-    let targetEntry = null;
-
-    if (pathname.startsWith('/api/message') && proxyMap.has('/v2')) {
-      targetEntry = proxyMap.get('/v2');
-    }
-    if (pathname.startsWith('/socket.io/') && proxyMap.has('/kuma')) {
-      targetEntry = proxyMap.get('/kuma');
-    }
-
-    if (!targetEntry) {
-      for (const [subpath, entry] of proxyMap.entries()) {
-        if (pathname === subpath || pathname.startsWith(subpath + '/')) {
-          targetEntry = entry;
-          break;
-        }
-      }
-    }
-
-    if (!targetEntry && req.headers['referer']) {
-      try {
-        const refUrl = new URL(req.headers['referer']);
-        for (const [subpath, entry] of proxyMap.entries()) {
-          if (refUrl.pathname === subpath || refUrl.pathname.startsWith(subpath + '/')) {
-            targetEntry = entry;
-            break;
-          }
-        }
-      } catch (e) {}
-    }
-
-    if (!targetEntry && req.headers['cookie']) {
-      const match = req.headers['cookie'].match(/__gw_active_subpath=([^;]+)/);
-      if (match && match[1]) {
-        const cookieSp = decodeURIComponent(match[1]);
-        if (proxyMap.has(cookieSp)) {
-          targetEntry = proxyMap.get(cookieSp);
-        }
-      }
-    }
-
-    if (targetEntry && targetEntry.route.options.ws !== false) {
-      const realIp = getClientRealIp(req);
-      req.headers['x-real-ip'] = realIp;
-      req.headers['x-forwarded-for'] = realIp;
-      req.headers['remote-host'] = realIp;
-      // 核心修复：WebSocket 协议升级时，必须与 HTTP 代理保持一致，将二级目录前缀剥离后再转发给上游！
-      const sp = targetEntry.route.subpath;
-      if (req.url.startsWith(sp + '/') || req.url === sp) {
-        req.url = req.url.substring(sp.length);
-        if (!req.url.startsWith('/')) req.url = '/' + req.url;
-      }
-      console.log(`[WS Upgrade] ${req.url} -> Forwarded to ${targetEntry.route.name}`);
-      standaloneWsProxy.ws(req, socket, head, {
-        target: targetEntry.route.target,
-        changeOrigin: targetEntry.route.options.changeOrigin !== false,
-        secure: false
-      }, (err) => {
-        console.error(`[WS Forward Error] ${targetEntry.route.name}:`, err.message);
-        try { socket.destroy(); } catch (e) {}
-      });
-      return;
-    }
-
-    socket.destroy();
-  });
-}
-setupUpgrade(httpServer);
-setupUpgrade(httpsServer);
+// WebSocket 穿透升级：与 HTTP 侧共用同一套归属判定与转发标头
+engine.attachUpgrade(httpServer);
+engine.attachUpgrade(httpsServer);
 
 // Proxy Protocol v2 二进制魔数 (12 字节固定前缀)
 const PP_V2_MAGIC = Buffer.from([0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A]);
 
 // 核心网络层：全自适应双协议嗅探与 Proxy Protocol v1/v2 深度解包网关
+const SOCKET_IDLE_TIMEOUT_MS = Number(process.env.GW_SOCKET_TIMEOUT_MS) || 15000;
+
 const masterServer = net.createServer((socket) => {
+  // 首包前必须有超时，避免半开连接耗尽文件描述符；首包到达后交还给 HTTP/WS 层管理
+  socket.setTimeout(SOCKET_IDLE_TIMEOUT_MS, () => socket.destroy());
   let isFirstPacket = true;
 
   const onData = (chunk) => {
     if (!isFirstPacket) return;
     isFirstPacket = false;
     socket.removeListener('data', onData);
+    socket.setTimeout(0);
 
     // A. 优先解包 Proxy Protocol v2 (二进制协议头)
     if (chunk.length >= 16 && chunk.subarray(0, 12).equals(PP_V2_MAGIC)) {
@@ -1592,14 +1482,23 @@ const masterServer = net.createServer((socket) => {
   socket.on('data', onData);
 });
 
+// 并发连接上限（半开连接超时已在 connection 处理器内设置）
+const MAX_CONNECTIONS = Number(process.env.GW_MAX_CONNECTIONS) || 2048;
+masterServer.maxConnections = MAX_CONNECTIONS;
+masterServer.on('drop', (data) => {
+  console.warn(`[Net] 连接数达到上限 ${MAX_CONNECTIONS}，已丢弃新连接 (remote=${data.remoteAddress || 'unknown'})`);
+});
+
 masterServer.listen(PORT, () => {
   console.log(`====================================================`);
   console.log(` Cloud Subpath Gateway Running on port: ${PORT}`);
   console.log(` Dual-Protocol Sniffer: Active (HTTP + HTTPS Dual-Mode)`);
   console.log(` Proxy Protocol Demuxer: Active (v1 + v2 Zero 400 Errors)`);
-  console.log(` Signature Routing: Active (Zero Crosstalk / v2 Isolation)`);
-  console.log(` Session Replenishment: Active (Entari Sandbox Cookie Guard)`);
-  console.log(` Real-IP Synchronization: Enabled (X-Real-IP, XFF, REMOTE-HOST)`);
+  console.log(` Signature Routing: Active (Declarative, Content-Learned)`);
+  console.log(` Rewrite Engine: Active (HTML/CSS/JS/JSON/RSC + gzip/br Negotiation)`);
+  console.log(` Session Capsule: Active (Random Device Token, No IP Trust)`);
+  console.log(` Proxy Header Trust: ${TRUST_PROXY_HEADERS ? 'ENABLED (behind trusted proxy)' : 'DISABLED (socket address only)'}`);
+  console.log(` Security Baseline: ${TRUST_PROXY_HEADERS ? 'proxy headers trusted' : 'IP spoofing blocked'} · login rate-limited · secrets generated`);
   console.log(` Admin WebUI & Public Portal: http://0.0.0.0:${PORT}`);
   console.log(`====================================================`);
 });

@@ -5,6 +5,8 @@ services:
     container_name: cloud-gateway
     build: .
     restart: always
+    init: true
+    # 注意：host 网络模式会直接暴露网关端口；如无特殊需要可改为 ports 映射
     network_mode: "host"
     volumes:
       - ./data:/app/data
@@ -15,3 +17,9 @@ services:
       - DATA_DIR=/app/data
       - SSL_CERT=/app/ssl/fullchain.pem
       - SSL_KEY=/app/ssl/privkey.pem
+      # 仅当网关部署在可信反代（Nginx/Traefik/Cloudflare Tunnel 等）之后时才置为 true
+      # - GW_TRUST_PROXY_HEADERS=true
+      # 首次启动可注入管理员口令（建议初始化后移除并在线改密）
+      # - GW_ADMIN_PASSWORD=change-me-please
+      # 固定对外主机名（防止 Host 头污染影响上游生成的链接）
+      # - GW_PUBLIC_HOST=gateway.example.com

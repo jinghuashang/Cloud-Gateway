@@ -393,6 +393,10 @@
             <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
             <span>更新设置</span>
           </button>
+          <button onclick="openProfileModal()" class="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium text-[#09090b] dark:text-[#fafafa] bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 transition-all whitespace-nowrap">
+            <i data-lucide="puzzle" class="w-3.5 h-3.5"></i>
+            <span>画像管理</span>
+          </button>
           <button onclick="openRouteEditModal()" class="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 rounded-lg shadow-sm transition-all whitespace-nowrap">
             <i data-lucide="plus" class="w-3.5 h-3.5"></i>
             <span>新增路由</span>
@@ -510,6 +514,14 @@
             <span class="font-semibold text-[#09090b] dark:text-[#fafafa]">高级反代特性</span>
             <span class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">自动补齐二级目录与 SPA 防脱轨</span>
           </div>
+          <div class="space-y-1">
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa]">应用画像（内置补丁集）</label>
+            <select id="formProfile" class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+              <option value="">自动（按子路径匹配内置画像）</option>
+              <option value="none">不使用画像（纯通用模式）</option>
+            </select>
+            <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight">画像决定该应用的签名路径、漂移路径、深度补全白名单与专属补丁；可在 <span class="font-mono">config.json</span> 的 <span class="font-mono">profiles</span> 中自定义</div>
+          </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
             <label class="flex items-start gap-2 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
               <input type="checkbox" id="formAutoPrefixSubpath" class="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-0">
@@ -539,6 +551,13 @@
                 <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight mt-0.5">拦截 pushState 保持二级目录</div>
               </div>
             </label>
+            <label class="flex items-start gap-2 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+              <input type="checkbox" id="formRewriteCookie" class="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-0">
+              <div>
+                <div class="font-medium text-[#09090b] dark:text-[#fafafa]">Cookie 路径收敛到子目录</div>
+                <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight mt-0.5">Path=/ 收敛为 Path=/subpath/，避免同域串味</div>
+              </div>
+            </label>
           </div>
         </div>
 
@@ -547,6 +566,138 @@
           <button type="submit" class="px-4 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm">保存热生效</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ======================= 应用画像管理模态框 ======================= -->
+  <div id="profileModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-2xl p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+        <div>
+          <h3 class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa]">应用画像管理</h3>
+          <p class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] mt-0.5">画像 = 某个应用在二级目录下需要的补丁集，保存后热生效</p>
+        </div>
+        <button onclick="closeProfileModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- 画像编辑表单 -->
+      <div id="profileFormWrap" class="hidden mt-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-800/40 p-3 space-y-2.5 text-xs">
+        <div class="flex items-center justify-between">
+          <span id="profileFormTitle" class="font-semibold text-[#09090b] dark:text-[#fafafa]">新建画像</span>
+          <span id="profileFormTip" class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]"></span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">画像名 *（字母数字点线，或以 / 开头绑定子路径）</label>
+            <input type="text" id="profileFormName" placeholder="myapp 或 /myapp" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa] font-mono">
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">显示名称</label>
+            <input type="text" id="profileFormLabel" placeholder="我的应用" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">签名路径（每行一个）</label>
+            <textarea id="profileFormSignatures" rows="3" placeholder="/api/myapp" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa] font-mono"></textarea>
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">漂移路径段（每行一个）</label>
+            <textarea id="profileFormDrift" rows="3" placeholder="dashboard" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa] font-mono"></textarea>
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">深度补全根（每行一个）</label>
+            <textarea id="profileFormDeepRoots" rows="3" placeholder="api" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa] font-mono"></textarea>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+          <label class="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer">
+            <input type="checkbox" id="profileFormDeepByDefault" class="rounded border-zinc-300 text-zinc-900 focus:ring-0">
+            <span>默认开启深度补全</span>
+          </label>
+          <label class="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer">
+            <input type="checkbox" id="profileFormNoBase" class="rounded border-zinc-300 text-zinc-900 focus:ring-0">
+            <span>不注入 base</span>
+          </label>
+          <label class="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer">
+            <input type="checkbox" id="profileFormShimAlways" class="rounded border-zinc-300 text-zinc-900 focus:ring-0">
+            <span>强制注入垫片</span>
+          </label>
+          <label class="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer">
+            <input type="checkbox" id="profileFormStorageIsolation" class="rounded border-zinc-300 text-zinc-900 focus:ring-0">
+            <span>localStorage 隔离</span>
+          </label>
+          <label class="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer">
+            <input type="checkbox" id="profileFormStaticBase" class="rounded border-zinc-300 text-zinc-900 focus:ring-0">
+            <span>静态目录 base</span>
+          </label>
+          <label class="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer">
+            <input type="checkbox" id="profileFormSyncTvRouter" class="rounded border-zinc-300 text-zinc-900 focus:ring-0">
+            <span>SyncTV 路由补丁</span>
+          </label>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">JS 补丁</label>
+            <select id="profileFormJsPatches" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]">
+              <option value="">无</option>
+              <option value="umami">umami（pathHasPrefix 与 _next 补丁）</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">会话胶囊 Cookie 名</label>
+            <input type="text" id="profileFormCapsuleCookie" placeholder="webui_sid" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa] font-mono">
+          </div>
+          <div>
+            <label class="block font-medium text-[#71717a] dark:text-[#a1a1aa] mb-1">会话胶囊命中路径（每行一个）</label>
+            <textarea id="profileFormCapsulePaths" rows="2" placeholder="/page" class="w-full px-3 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa] font-mono"></textarea>
+          </div>
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-0.5">
+          <button type="button" onclick="closeProfileForm()" class="px-3.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-[#71717a] dark:text-[#a1a1aa] font-medium">取消</button>
+          <button type="button" onclick="submitProfileForm()" class="px-4 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm">保存画像</button>
+        </div>
+      </div>
+
+      <div class="mt-3 flex items-center justify-between">
+        <span class="text-[11px] font-semibold text-[#09090b] dark:text-[#fafafa]">自定义画像</span>
+        <button onclick="openProfileForm(null)" class="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] rounded-lg transition-all">
+          <i data-lucide="plus" class="w-3 h-3"></i>
+          <span>新建画像</span>
+        </button>
+      </div>
+      <div id="profileCustomList" class="mt-2 space-y-2 text-xs"></div>
+
+      <details class="mt-3 rounded-xl border border-zinc-200 dark:border-zinc-800 p-3 text-xs">
+        <summary class="cursor-pointer text-[11px] font-semibold text-[#09090b] dark:text-[#fafafa]">内置画像参考（不可删除，可被同名自定义画像覆盖）</summary>
+        <div id="profileBuiltinList" class="mt-2 space-y-1.5"></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ======================= 路由诊断模态框 ======================= -->
+  <div id="doctorModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-150">
+    <div class="relative w-full max-w-2xl p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+        <div class="min-w-0">
+          <h3 id="doctorTitle" class="text-sm font-semibold text-[#09090b] dark:text-[#fafafa]">路由诊断</h3>
+          <p class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] mt-0.5">用与线上完全相同的规则干跑一次响应体，只读、不影响运行</p>
+        </div>
+        <button onclick="closeDoctorModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="mt-3 flex items-center gap-2 text-xs">
+        <input type="text" id="doctorPath" value="/" placeholder="/ 或 /login 或 /api/x" class="flex-1 px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa] font-mono">
+        <button onclick="runDoctorProbe()" class="px-3.5 py-1.5 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-[#fafafa] dark:text-[#09090b] dark:hover:bg-zinc-200 text-white font-semibold shadow-sm whitespace-nowrap">开始体检</button>
+      </div>
+
+      <div id="doctorBody" class="mt-3 space-y-3 text-xs">
+        <div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] py-6 text-center">选择一条路由后点击「开始体检」</div>
+      </div>
     </div>
   </div>
 
@@ -781,6 +932,8 @@
   <script>
     let publicData = { siteTitle: 'Cloud Gateway', siteSubtitle: '', categories: [], routes: [] };
     let adminRoutes = [];
+    let adminProfiles = null;
+    let runtimeState = {};
     let currentCategory = '全部';
     let searchQuery = '';
     let authToken = localStorage.getItem('cloud_gateway_token') || '';
@@ -816,6 +969,27 @@
       await fetchPublicInfo();
       checkAuthStatus();
       setupSearch();
+
+      // 事件委托：分类按钮与镜像行均为动态渲染，避免把配置值拼进内联 JS
+      const categoryContainer = document.getElementById('categoryContainer');
+      if (categoryContainer) {
+        categoryContainer.addEventListener('click', (event) => {
+          const btn = event.target.closest('[data-category]');
+          if (btn) selectCategory(btn.getAttribute('data-category'));
+        });
+      }
+
+      const mirrorsContainer = document.getElementById('mirrorsListContainer');
+      if (mirrorsContainer) {
+        mirrorsContainer.addEventListener('change', (event) => {
+          const radio = event.target.closest('[data-mirror-url]');
+          if (radio) handleSelectMirror(radio.getAttribute('data-mirror-url'));
+        });
+        mirrorsContainer.addEventListener('click', (event) => {
+          const btn = event.target.closest('[data-mirror-id]');
+          if (btn) handleDeleteCustomMirror(btn.getAttribute('data-mirror-id'));
+        });
+      }
     }
       // 每 5 秒轮询最新实时流量态势指标驱动曲线与 QPS 动态跳动
       setInterval(async () => {
@@ -1016,7 +1190,7 @@
         else if (r.subpath === '/frp') fullUrl = '/frp/static/';
 
         return `
-          <a href="${fullUrl}" target="_blank" rel="noopener noreferrer"
+          <a href="${escapeHtml(fullUrl)}" target="_blank" rel="noopener noreferrer"
             class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-lg text-xs font-medium bg-zinc-100 hover:bg-zinc-200/80 dark:bg-zinc-800/90 dark:hover:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] border border-zinc-200/80 dark:border-zinc-700/80 transition-colors">
             <span class="font-semibold">${escapeHtml(r.name)}</span>
             <span class="text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(r.subpath)}/</span>
@@ -1032,13 +1206,13 @@
       container.innerHTML = cats.map(cat => {
         const active = currentCategory === cat;
         return `
-          <button onclick="selectCategory('${cat}')" 
+          <button type="button" data-category="${escapeHtml(cat)}"
             class="px-3 py-1 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
               active 
                 ? 'bg-[#09090b] text-white dark:bg-[#fafafa] dark:text-[#09090b] shadow-sm' 
                 : 'bg-zinc-100 hover:bg-zinc-200/80 text-[#71717a] dark:bg-zinc-800 dark:hover:bg-zinc-750 dark:text-[#a1a1aa]'
             }">
-            ${cat}
+            ${escapeHtml(cat)}
           </button>
         `;
       }).join('');
@@ -1090,7 +1264,7 @@
         else if (item.subpath === '/frp') fullUrl = '/frp/static/';
 
         return `
-          <a href="${fullUrl}" target="_blank" rel="noopener noreferrer" 
+          <a href="${escapeHtml(fullUrl)}" target="_blank" rel="noopener noreferrer" 
             class="tqq-card group relative p-4 sm:p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 shadow-sm flex flex-col justify-between cursor-pointer">
             <div>
               <div class="flex items-start justify-between gap-3 mb-2.5 sm:mb-3">
@@ -1140,7 +1314,7 @@
 
     function renderIcon(name) {
       if (!name) return '<i data-lucide="globe" class="w-4 h-4"></i>';
-      if (/\p{Emoji}/u.test(name)) return `<span class="text-base">${name}</span>`;
+      if (/\p{Emoji}/u.test(name)) return `<span class="text-base">${escapeHtml(name)}</span>`;
       return `<i data-lucide="${escapeHtml(name)}" class="w-4 h-4"></i>`;
     }
 
@@ -1222,8 +1396,16 @@
     }
 
     function handleLogout() {
+      const previousToken = authToken;
       authToken = '';
       localStorage.removeItem('cloud_gateway_token');
+      // 服务端吊销全部令牌（失败也不阻塞本地登出）
+      if (previousToken) {
+        fetch('/__gw/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${previousToken}` }
+        }).catch(() => {});
+      }
       const badge = document.getElementById('adminUpdateBadgeBtn');
       if (badge) badge.classList.add('hidden');
       checkAuthStatus();
@@ -1257,6 +1439,10 @@
         }
         const data = await res.json();
         adminRoutes = data.routes || [];
+        runtimeState = data.runtime || {};
+        if (!adminProfiles) {
+          await loadAdminProfiles();
+        }
         renderAdminUI();
       } catch (err) {
         console.error('Failed to fetch routes:', err);
@@ -1264,16 +1450,372 @@
     }
 
     // 渲染管理界面：同时生成桌面端表格和移动端自适应卡片列表
+    async function loadAdminProfiles(force = false) {
+      if (adminProfiles && !force) return adminProfiles;
+      try {
+        const res = await fetch('/__gw/api/admin/profiles', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) return null;
+        adminProfiles = await res.json();
+        populateProfileSelect();
+        return adminProfiles;
+      } catch (err) {
+        console.error('Failed to fetch profiles:', err);
+        return null;
+      }
+    }
+
+    // ---------------- 画像管理 ----------------
+
+    let profileRows = []; // 当前自定义画像快照：用下标引用，避免拼接进 onclick 造成注入
+
+    async function openProfileModal() {
+      await loadAdminProfiles(true);
+      closeProfileForm();
+      renderProfileManager();
+      const modal = document.getElementById('profileModal');
+      modal.classList.remove('hidden');
+      setTimeout(() => modal.classList.remove('opacity-0'), 10);
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function closeProfileModal() {
+      const modal = document.getElementById('profileModal');
+      modal.classList.add('opacity-0');
+      setTimeout(() => modal.classList.add('hidden'), 150);
+    }
+
+    function renderProfileManager() {
+      profileRows = (adminProfiles && adminProfiles.custom) || [];
+      const list = document.getElementById('profileCustomList');
+      list.innerHTML = profileRows.length ? profileRows.map((p, idx) => `
+        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3 space-y-1.5">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-semibold text-[11px] text-[#09090b] dark:text-[#fafafa]">${escapeHtml(p.label)}</span>
+                <span class="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 font-mono text-[10px] text-[#09090b] dark:text-[#fafafa]">${escapeHtml(p.name)}</span>
+                ${(p.usedBy || []).length
+                  ? `<span class="text-[10px] text-emerald-600 dark:text-emerald-400">使用中：${escapeHtml(p.usedBy.join('、'))}</span>`
+                  : '<span class="text-[10px] text-[#a1a1aa]">未使用</span>'}
+              </div>
+              <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] mt-1">${escapeHtml(p.summary || '无实质配置')}</div>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <button onclick="openProfileForm(${idx})" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa]" title="编辑"><i data-lucide="edit" class="w-3.5 h-3.5"></i></button>
+              <button onclick="deleteProfile(${idx})" class="p-1 text-zinc-400 hover:text-rose-600" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+            </div>
+          </div>
+        </div>`).join('') : '<div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] py-3 text-center">还没有自定义画像，点右上角新建</div>';
+
+      const builtins = (adminProfiles && adminProfiles.builtins) || [];
+      document.getElementById('profileBuiltinList').innerHTML = builtins.map(b => `
+        <div class="flex items-start justify-between gap-2 py-1 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
+          <div class="min-w-0">
+            <span class="text-[11px] font-medium text-[#09090b] dark:text-[#fafafa]">${escapeHtml(b.label)}</span>
+            <span class="ml-1.5 font-mono text-[10px] text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(b.name)}</span>
+            <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(b.summary || '')}</div>
+          </div>
+          <span class="shrink-0 text-[10px] ${(b.usedBy || []).length ? 'text-emerald-600 dark:text-emerald-400' : 'text-[#a1a1aa]'}">${(b.usedBy || []).length ? escapeHtml(b.usedBy.join('、')) : '未使用'}</span>
+        </div>`).join('');
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function splitProfileList(value) {
+      return String(value || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+    }
+
+    function openProfileForm(index) {
+      const form = document.getElementById('profileFormWrap');
+      const editing = index !== null && index !== undefined;
+      const entry = editing ? profileRows[index] : null;
+      const fields = (entry && entry.fields) || {};
+      const capsule = fields.sessionCapsule || {};
+
+      document.getElementById('profileFormTitle').textContent = editing ? `编辑画像：${entry.label}` : '新建画像';
+      document.getElementById('profileFormTip').textContent = editing ? '画像名不可修改，改名请删除后新建' : '保存后立即热生效';
+      const nameInput = document.getElementById('profileFormName');
+      nameInput.value = editing ? entry.name : '';
+      nameInput.disabled = editing;
+      document.getElementById('profileFormLabel').value = fields.label || '';
+      document.getElementById('profileFormSignatures').value = (fields.signatures || []).join('\n');
+      document.getElementById('profileFormDrift').value = (fields.drift || []).join('\n');
+      document.getElementById('profileFormDeepRoots').value = (fields.deepRoots || []).join('\n');
+      document.getElementById('profileFormDeepByDefault').checked = fields.deepByDefault === true;
+      document.getElementById('profileFormNoBase').checked = fields.noBase === true;
+      document.getElementById('profileFormShimAlways').checked = fields.shimAlways === true;
+      document.getElementById('profileFormStorageIsolation').checked = fields.storageIsolation === true;
+      document.getElementById('profileFormStaticBase').checked = fields.staticBase === true;
+      document.getElementById('profileFormSyncTvRouter').checked = fields.syncTvRouter === true;
+      document.getElementById('profileFormJsPatches').value = fields.jsPatches === 'umami' ? 'umami' : '';
+      document.getElementById('profileFormCapsuleCookie').value = capsule.cookie || '';
+      document.getElementById('profileFormCapsulePaths').value = (capsule.paths || []).join('\n');
+
+      form.classList.remove('hidden');
+      form.scrollIntoView({ block: 'nearest' });
+    }
+
+    function closeProfileForm() {
+      const form = document.getElementById('profileFormWrap');
+      form.classList.add('hidden');
+      document.getElementById('profileFormName').disabled = false;
+    }
+
+    async function submitProfileForm() {
+      const payload = {
+        name: document.getElementById('profileFormName').value.trim(),
+        label: document.getElementById('profileFormLabel').value.trim(),
+        signatures: splitProfileList(document.getElementById('profileFormSignatures').value),
+        drift: splitProfileList(document.getElementById('profileFormDrift').value),
+        deepRoots: splitProfileList(document.getElementById('profileFormDeepRoots').value),
+        deepByDefault: document.getElementById('profileFormDeepByDefault').checked,
+        noBase: document.getElementById('profileFormNoBase').checked,
+        shimAlways: document.getElementById('profileFormShimAlways').checked,
+        storageIsolation: document.getElementById('profileFormStorageIsolation').checked,
+        staticBase: document.getElementById('profileFormStaticBase').checked,
+        syncTvRouter: document.getElementById('profileFormSyncTvRouter').checked,
+        jsPatches: document.getElementById('profileFormJsPatches').value || undefined
+      };
+      const capsuleCookie = document.getElementById('profileFormCapsuleCookie').value.trim();
+      if (capsuleCookie) {
+        payload.sessionCapsule = {
+          cookie: capsuleCookie,
+          paths: splitProfileList(document.getElementById('profileFormCapsulePaths').value)
+        };
+      }
+
+      try {
+        const res = await fetch('/__gw/api/admin/profiles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.error || '画像保存失败');
+          return;
+        }
+        await loadAdminProfiles(true);
+        renderProfileManager();
+        closeProfileForm();
+        await fetchAdminRoutes();
+      } catch (err) {
+        alert('画像保存失败: ' + err.message);
+      }
+    }
+
+    async function deleteProfile(index) {
+      const entry = profileRows[index];
+      if (!entry) return;
+      const inUse = (entry.usedBy || []).length > 0;
+      if (!confirm(inUse
+        ? `画像「${entry.label}」正被 ${entry.usedBy.join('、')} 使用，删除后这些路由将以纯通用模式运行。确认删除？`
+        : `确认删除画像「${entry.label}」？`)) return;
+
+      try {
+        const res = await fetch(`/__gw/api/admin/profiles/${encodeURIComponent(entry.name)}${inUse ? '?force=1' : ''}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.error || '画像删除失败');
+          return;
+        }
+        await loadAdminProfiles(true);
+        renderProfileManager();
+        await fetchAdminRoutes();
+      } catch (err) {
+        alert('画像删除失败: ' + err.message);
+      }
+    }
+
+    // ---------------- 路由诊断 ----------------
+
+    let doctorRouteIndex = null;
+
+    function openDoctorModal(index) {
+      const route = adminRoutes[index];
+      if (!route) return;
+      doctorRouteIndex = index;
+      document.getElementById('doctorTitle').textContent = `路由诊断：${route.name}（${route.subpath}）`;
+      document.getElementById('doctorPath').value = '/';
+      document.getElementById('doctorBody').innerHTML = '<div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] py-6 text-center">正在体检上游…</div>';
+      const modal = document.getElementById('doctorModal');
+      modal.classList.remove('hidden');
+      setTimeout(() => modal.classList.remove('opacity-0'), 10);
+      if (window.lucide) lucide.createIcons();
+      runDoctorProbe();
+    }
+
+    function closeDoctorModal() {
+      const modal = document.getElementById('doctorModal');
+      modal.classList.add('opacity-0');
+      setTimeout(() => modal.classList.add('hidden'), 150);
+    }
+
+    async function runDoctorProbe() {
+      const route = adminRoutes[doctorRouteIndex];
+      const body = document.getElementById('doctorBody');
+      if (!route) return;
+      const probePath = document.getElementById('doctorPath').value.trim() || '/';
+      body.innerHTML = '<div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa] py-6 text-center">正在体检上游…</div>';
+
+      try {
+        const res = await fetch(`/__gw/api/admin/route-probe?subpath=${encodeURIComponent(route.subpath)}&path=${encodeURIComponent(probePath)}`, {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        renderDoctorReport(data);
+      } catch (err) {
+        body.innerHTML = `<div class="text-[11px] text-rose-600 py-4">诊断失败：${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function doctorChip(label, value, tone = 'zinc') {
+      const tones = {
+        zinc: 'bg-zinc-100 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa]',
+        ok: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400',
+        warn: 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400',
+        bad: 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400'
+      };
+      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium ${tones[tone] || tones.zinc}">
+        <span class="opacity-70">${escapeHtml(label)}</span><span class="font-mono">${escapeHtml(String(value))}</span></span>`;
+    }
+
+    function doctorSection(title, inner, accent = '') {
+      return `<div class="rounded-xl border ${accent || 'border-zinc-200 dark:border-zinc-800'} p-3 space-y-2">
+        <div class="text-[11px] font-semibold text-[#09090b] dark:text-[#fafafa]">${escapeHtml(title)}</div>
+        ${inner}
+      </div>`;
+    }
+
+    function renderDoctorReport(data) {
+      const body = document.getElementById('doctorBody');
+      if (!data || data.ok !== true) {
+        body.innerHTML = `<div class="rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/60 dark:bg-rose-950/30 p-3 text-[11px] text-rose-700 dark:text-rose-300">
+          诊断失败：${escapeHtml((data && data.error) || '未知错误')}<br>
+          <span class="opacity-80">上游地址：${escapeHtml((data && data.target) || '-')}</span>
+        </div>`;
+        return;
+      }
+
+      const upstream = data.upstream || {};
+      const rewrite = data.body || {};
+      const headers = data.headers || {};
+
+      const chips = [
+        doctorChip('HTTP', upstream.status, upstream.status < 400 ? 'ok' : 'bad'),
+        doctorChip('延迟', `${upstream.latencyMs}ms`, upstream.latencyMs < 800 ? 'ok' : 'warn'),
+        doctorChip('类型', upstream.contentType || '未声明', 'zinc'),
+        doctorChip('体积', `${upstream.bodyBytes}B`, 'zinc'),
+        doctorChip('画像', data.profile || 'none', data.profile && data.profile !== 'none' ? 'ok' : 'zinc')
+      ].join('');
+
+      const optionChips = Object.entries(data.options || {}).map(([key, value]) =>
+        doctorChip(key, value === true ? '开' : (value === false ? '关' : value), value === true ? 'ok' : 'zinc')
+      ).join(' ');
+
+      const sampleRows = (rewrite.samples || []).slice(0, 10).map((s) => `
+        <div class="flex items-center justify-between gap-2 py-0.5 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
+          <span class="font-mono text-[10px] text-[#09090b] dark:text-[#fafafa] truncate">${escapeHtml(s.path || '/')}</span>
+          <span class="text-[10px] ${s.action === 'rewritten' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}">${s.action === 'rewritten' ? '会补全' : '白名单跳过'}</span>
+        </div>`).join('') || '<div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">无匹配样例</div>';
+
+      const rewritSection = rewrite.rewritable
+        ? doctorSection('响应体重写（干跑）', `
+            <div class="flex flex-wrap gap-1.5">
+              ${doctorChip('待补全', rewrite.rewrittenRefs || 0, (rewrite.rewrittenRefs || 0) > 0 ? 'ok' : 'zinc')}
+              ${doctorChip('已带前缀', rewrite.prefixedRefs || 0)}
+              ${doctorChip('白名单跳过', rewrite.blockedRefs || 0, (rewrite.blockedRefs || 0) > 0 ? 'warn' : 'zinc')}
+              ${doctorChip('外部地址', rewrite.externalRefs || 0)}
+              ${doctorChip('是否改写', rewrite.modified ? '是' : '否')}
+            </div>
+            <div class="space-y-0.5">${sampleRows}</div>
+            ${rewrite.segments && Object.keys(rewrite.segments).length ? `<div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">命中路径段：${escapeHtml(Object.entries(rewrite.segments).map(([k, v]) => k + '(' + v + ')').join('、'))}</div>` : ''}
+          `)
+        : doctorSection('响应体', `<div class="text-[11px] text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(rewrite.note || '非文本响应，原样透传')}</div>`);
+
+      const cookieRows = (headers.cookies || []).length
+        ? (headers.cookies || []).map((c) => `
+            <div class="flex items-center justify-between gap-2 py-0.5 border-b border-zinc-100 dark:border-zinc-800 last:border-0 text-[10px]">
+              <span class="font-mono text-[#09090b] dark:text-[#fafafa]">${escapeHtml(c.name)}</span>
+              <span class="text-[#71717a] dark:text-[#a1a1aa]">Domain: ${escapeHtml(c.domain || '无')} · Path: ${escapeHtml(c.path || '无')} · SameSite: ${escapeHtml(c.sameSite || '网关补齐')}</span>
+            </div>`).join('')
+        : '<div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">未下发 Cookie</div>';
+
+      const headerSection = doctorSection('响应头体检', `
+        <div class="flex flex-wrap gap-1.5">
+          ${headers.location ? doctorChip('Location', headers.location, headers.selfLoop ? 'bad' : 'zinc') : ''}
+          ${headers.rewrittenLocation && headers.rewrittenLocation !== headers.location ? doctorChip('补全后', headers.rewrittenLocation, 'ok') : ''}
+          ${headers.selfLoop ? doctorChip('自跳转', '是（网关拦截 508）', 'bad') : ''}
+          ${doctorChip('缓存', headers.cache ? headers.cache.effective : '-', headers.cache && headers.cache.staticAsset ? 'ok' : 'zinc')}
+          ${doctorChip('CSP/XFO', headers.frameGuards && (headers.frameGuards.contentSecurityPolicy || headers.frameGuards.xFrameOptions) ? '存在' : '无')}
+        </div>
+        <div class="space-y-0.5">${cookieRows}</div>
+      `);
+
+      const stackSection = (data.stack || []).length
+        ? doctorSection('技术栈嗅探', `<div class="flex flex-wrap gap-1.5">${data.stack.map((s) => doctorChip('', s, 'zinc')).join('')}</div>`)
+        : '';
+
+      const recoSection = doctorSection('建议', (data.recommendations || []).length
+        ? `<ul class="space-y-1.5">${data.recommendations.map((r) => `<li class="flex gap-2 text-[11px] text-[#09090b] dark:text-[#fafafa]"><span class="text-amber-500">•</span><span>${escapeHtml(r)}</span></li>`).join('')}</ul>`
+        : '<div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa]">未发现明显问题</div>', 'border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20');
+
+      body.innerHTML = `
+        <div class="flex flex-wrap gap-1.5">${chips}</div>
+        ${rewritSection}
+        ${headerSection}
+        ${stackSection}
+        ${recoSection}
+        <details class="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+          <summary class="cursor-pointer text-[11px] font-semibold text-[#09090b] dark:text-[#fafafa]">生效选项快照</summary>
+          <div class="mt-2 flex flex-wrap gap-1.5">${optionChips}</div>
+          <div class="mt-2 text-[10px] text-[#71717a] dark:text-[#a1a1aa] font-mono break-all">上游请求：${escapeHtml(data.upstream.url)}（X-Forwarded-Prefix: ${escapeHtml(data.subpath)}）</div>
+        </details>`;
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function populateProfileSelect() {
+      const select = document.getElementById('formProfile');
+      if (!select || !adminProfiles) return;
+      const bindings = adminProfiles.subpathBindings || {};
+      const describe = (name) => Object.entries(bindings).filter(([, v]) => v === name).map(([k]) => k).join(', ');
+      const builtins = (adminProfiles.builtins || []).map((p) => {
+        const subpaths = (p.subpaths || []).length ? ` · ${p.subpaths.join(', ')}` : (describe(p.name) ? ` · ${describe(p.name)}` : '');
+        return `<option value="${escapeHtml(p.name)}">内置：${escapeHtml(p.label)}${escapeHtml(subpaths)}</option>`;
+      }).join('');
+      const customs = (adminProfiles.custom || []).map((p) => {
+        const scope = p.boundBySubpath ? ` · 绑定 ${p.name}` : '';
+        return `<option value="${escapeHtml(p.name)}">自定义：${escapeHtml(p.label)}${escapeHtml(scope)}</option>`;
+      }).join('');
+      select.innerHTML = '<option value="">自动（按子路径匹配内置画像）</option><option value="none">不使用画像（纯通用模式）</option>' + builtins + customs;
+    }
+
+    function profileBadge(subpath) {
+      const state = runtimeState[subpath];
+      if (!state) return '';
+      const learned = (state.learnedRoots || []).length;
+      const parts = [`画像 ${state.profile || 'none'}`];
+      if (learned) parts.push(`自学习签名 ${learned}`);
+      return parts.join(' · ');
+    }
+
     function renderAdminUI() {
       // 1. 桌面端表格
       const tbody = document.getElementById('adminTableBody');
-      tbody.innerHTML = adminRoutes.map(r => `
+      tbody.innerHTML = adminRoutes.map((r, idx) => `
         <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-850/50 transition-colors">
-          <td class="py-3 px-6 font-medium text-[#09090b] dark:text-[#fafafa] flex items-center gap-2">
-            <div class="w-6 h-6 rounded bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[#09090b] dark:text-[#fafafa]">
-              ${renderIcon(r.icon)}
+          <td class="py-3 px-6 font-medium text-[#09090b] dark:text-[#fafafa]">
+            <div class="flex items-center gap-2">
+              <div class="w-6 h-6 rounded bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[#09090b] dark:text-[#fafafa]">
+                ${renderIcon(r.icon)}
+              </div>
+              <span>${escapeHtml(r.name)}</span>
             </div>
-            <span>${escapeHtml(r.name)}</span>
+            ${profileBadge(r.subpath) ? `<div class="mt-1 ml-8 text-[10px] font-mono text-[#a1a1aa] dark:text-[#71717a]">${escapeHtml(profileBadge(r.subpath))}</div>` : ''}
           </td>
           <td class="py-3 px-4 font-mono font-medium text-[#09090b] dark:text-[#fafafa]">${escapeHtml(r.subpath)}/</td>
           <td class="py-3 px-4 font-mono text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(r.target)}</td>
@@ -1285,7 +1827,8 @@
             </button>
           </td>
           <td class="py-3 px-6 text-right space-x-2">
-            <a href="${r.subpath}/" target="_blank" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa] inline-block"><i data-lucide="external-link" class="w-3.5 h-3.5"></i></a>
+            <a href="${escapeHtml(r.subpath)}/" target="_blank" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa] inline-block"><i data-lucide="external-link" class="w-3.5 h-3.5"></i></a>
+            <button onclick="openDoctorModal(${idx})" class="p-1 text-zinc-400 hover:text-emerald-600" title="诊断"><i data-lucide="activity" class="w-3.5 h-3.5"></i></button>
             <button onclick="openRouteEditModal('${r.id}')" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa]"><i data-lucide="edit" class="w-3.5 h-3.5"></i></button>
             <button onclick="deleteRoute('${r.id}')" class="p-1 text-zinc-400 hover:text-rose-600"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
           </td>
@@ -1294,7 +1837,7 @@
 
       // 2. 移动端卡片视图 (彻底杜绝文字竖排挤压！)
       const mobileList = document.getElementById('adminMobileList');
-      mobileList.innerHTML = adminRoutes.map(r => `
+      mobileList.innerHTML = adminRoutes.map((r, idx) => `
         <div class="p-3.5 rounded-xl bg-zinc-50/60 dark:bg-zinc-800/60/60 border border-zinc-200/60 dark:border-zinc-800 space-y-2.5">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
@@ -1314,12 +1857,17 @@
             <span class="px-1.5 py-0.5 rounded bg-zinc-200/80 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] font-bold">${escapeHtml(r.subpath)}/</span>
             <span class="text-[#71717a] dark:text-[#a1a1aa] truncate">${escapeHtml(r.target)}</span>
           </div>
+          ${profileBadge(r.subpath) ? `<div class="text-[10px] font-mono text-[#a1a1aa] dark:text-[#71717a]">${escapeHtml(profileBadge(r.subpath))}</div>` : ''}
 
           <div class="pt-2 border-t border-zinc-200/50 dark:border-zinc-800 flex items-center justify-end gap-3 text-xs">
-            <a href="${r.subpath}/" target="_blank" class="inline-flex items-center gap-1 text-[#09090b] dark:text-[#fafafa] font-medium">
+            <a href="${escapeHtml(r.subpath)}/" target="_blank" class="inline-flex items-center gap-1 text-[#09090b] dark:text-[#fafafa] font-medium">
               <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
               <span>访问</span>
             </a>
+            <button onclick="openDoctorModal(${idx})" class="inline-flex items-center gap-1 text-emerald-600 font-medium">
+              <i data-lucide="activity" class="w-3.5 h-3.5"></i>
+              <span>诊断</span>
+            </button>
             <button onclick="openRouteEditModal('${r.id}')" class="inline-flex items-center gap-1 text-zinc-600 dark:text-zinc-300 font-medium">
               <i data-lucide="edit" class="w-3.5 h-3.5"></i>
               <span>编辑</span>
@@ -1374,6 +1922,9 @@
         document.getElementById('formRewriteLocation').checked = r.options?.rewriteLocation !== false;
         document.getElementById('formRewriteHtml').checked = r.options?.rewriteHtml !== false;
         document.getElementById('formInjectBase').checked = r.options?.injectBase === true;
+        document.getElementById('formRewriteCookie').checked = r.options?.rewriteCookie === true;
+        if (!adminProfiles) loadAdminProfiles();
+        document.getElementById('formProfile').value = r.options?.profile || '';
       } else {
         title.textContent = '新增代理服务';
         document.getElementById('formRouteId').value = '';
@@ -1388,6 +1939,8 @@
         document.getElementById('formRewriteLocation').checked = true;
         document.getElementById('formRewriteHtml').checked = true;
         document.getElementById('formInjectBase').checked = false;
+        document.getElementById('formRewriteCookie').checked = false;
+        document.getElementById('formProfile').value = '';
       }
 
       modal.classList.remove('hidden');
@@ -1417,8 +1970,9 @@
           rewriteLocation: document.getElementById('formRewriteLocation').checked,
           rewriteHtml: document.getElementById('formRewriteHtml').checked,
           injectBase: document.getElementById('formInjectBase').checked,
+          rewriteCookie: document.getElementById('formRewriteCookie').checked,
+          profile: document.getElementById('formProfile').value,
           autoSlash: true,
-          rewriteCookie: false,
           ws: true,
           changeOrigin: true
         }
@@ -1715,7 +2269,7 @@
               : (ping.latency < 1500 ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400');
             pingBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${colorCls}">${ping.latency}ms</span>`;
           } else {
-            pingBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400">${ping.error || '不可用'}</span>`;
+            pingBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400">${escapeHtml(ping.error || '不可用')}</span>`;
           }
         }
 
@@ -1725,7 +2279,7 @@
         return `
           <div class="flex items-center justify-between p-2.5 rounded-xl border ${isChecked && proxyMode === 'manual' ? 'border-blue-500 bg-blue-50/20 dark:bg-blue-950/20' : 'border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900'} transition-all text-xs">
             <label class="flex items-center gap-2.5 flex-1 min-w-0 cursor-pointer">
-              <input type="radio" name="selectedMirrorRadio" value="${escapeHtml(m.url)}" ${isChecked ? 'checked' : ''} onchange="handleSelectMirror('${escapeHtml(m.url)}')" class="text-blue-600">
+              <input type="radio" name="selectedMirrorRadio" value="${escapeHtml(m.url)}" ${isChecked ? 'checked' : ''} data-mirror-url="${escapeHtml(m.url)}" class="text-blue-600">
               <div class="truncate">
                 <div class="flex items-center gap-1.5">
                   <span class="font-medium text-[#09090b] dark:text-[#fafafa] truncate">${escapeHtml(m.name)}</span>
@@ -1739,7 +2293,7 @@
             <div class="flex items-center gap-2 shrink-0 ml-2">
               ${pingBadge}
               ${isCustom ? `
-                <button type="button" onclick="handleDeleteCustomMirror('${m.id}')" class="p-1 text-zinc-400 hover:text-rose-600 rounded">
+                <button type="button" data-mirror-id="${escapeHtml(m.id)}" class="p-1 text-zinc-400 hover:text-rose-600 rounded">
                   <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                 </button>
               ` : ''}
