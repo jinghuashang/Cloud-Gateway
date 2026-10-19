@@ -29,3 +29,7 @@ Thumbs.db
 
 # Serena local cache
 .serena/
+
+# 部署环境本地覆盖（不提交）
+docker-compose.override.yml
+*.bundle

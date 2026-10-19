@@ -1489,6 +1489,12 @@ masterServer.on('drop', (data) => {
   console.warn(`[Net] 连接数达到上限 ${MAX_CONNECTIONS}，已丢弃新连接 (remote=${data.remoteAddress || 'unknown'})`);
 });
 
+// http-proxy-middleware 会为每条路由在 server 上订阅一个 close 清理监听器；
+// 路由数量由管理员控制且有限，放开监听器上限避免误报内存泄漏。
+for (const srv of [httpServer, httpsServer, masterServer]) {
+  if (srv && typeof srv.setMaxListeners === 'function') srv.setMaxListeners(0);
+}
+
 masterServer.listen(PORT, () => {
   console.log(`====================================================`);
   console.log(` Cloud Subpath Gateway Running on port: ${PORT}`);
