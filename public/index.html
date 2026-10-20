@@ -1229,7 +1229,7 @@
         let fullUrl = r.subpath.endsWith('/') ? r.subpath : r.subpath + '/';
         if (r.subpath === '/ali') fullUrl = '/ali/#/';
         else if (r.subpath === '/live') fullUrl = '/live/web/';
-        else if (r.subpath === '/frp') fullUrl = '/frp/static/';
+
 
         return `
           <a href="${escapeHtml(fullUrl)}" target="_blank" rel="noopener noreferrer"
@@ -1303,7 +1303,7 @@
         let fullUrl = item.subpath.endsWith('/') ? item.subpath : item.subpath + '/';
         if (item.subpath === '/ali') fullUrl = '/ali/#/';
         else if (item.subpath === '/live') fullUrl = '/live/web/';
-        else if (item.subpath === '/frp') fullUrl = '/frp/static/';
+
 
         return `
           <a href="${escapeHtml(fullUrl)}" target="_blank" rel="noopener noreferrer" 

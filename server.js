@@ -1368,6 +1368,17 @@ const PORTAL_CSP = [
   "form-action 'self'"
 ].join('; ');
 
+// 构建标识：容器每次重建（version.json 随镜像写入）都会变化。
+// 用于一次性清理旧版本遗留在子路径 URL 上的门户文档缓存（旧 catch-all 无缓存头，会被浏览器启发式缓存）。
+const BUILD_ID = (() => {
+  try {
+    return String(Math.round(fs.statSync(path.join(__dirname, 'version.json')).mtimeMs));
+  } catch {
+    return String(Date.now());
+  }
+})();
+const BUILD_COOKIE = '__gw_build';
+
 // 门户文档统一响应头：安全头 + 禁止缓存（防止旧门户被缓存后承载在子路径 URL 上）
 const applyPortalHeaders = (res) => {
   res.setHeader('Content-Security-Policy', PORTAL_CSP);
@@ -1382,6 +1393,13 @@ const applyPortalHeaders = (res) => {
 // 门户首页：显式路由（先于静态托管），始终 no-store
 app.get(['/', '/index.html'], (req, res) => {
   applyPortalHeaders(res);
+  // 旧版本曾把门户文档缓存到 /v2/、/ani/ 等子路径（无缓存头的 catch-all），
+  // 升级后按构建号一次性清掉同源 HTTP 缓存，避免用户点服务时看到旧门户。
+  const seenBuild = String(req.headers.cookie || '').match(/(?:^|;\s*)__gw_build=([^;]+)/);
+  if (!seenBuild || seenBuild[1] !== BUILD_ID) {
+    res.setHeader('Clear-Site-Data', '"cache"');
+    res.append('Set-Cookie', `${BUILD_COOKIE}=${BUILD_ID}; Path=/; Max-Age=31536000; SameSite=Lax`);
+  }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

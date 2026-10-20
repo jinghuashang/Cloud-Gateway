@@ -506,6 +506,13 @@ async function main() {
     res = await get('/__gw/api/public/info');
     check('门户内部接口未被劫持', res.status === 200 && JSON.parse(res.text).routes.length === 9);
 
+    // 旧版本把门户文档缓存进子路径：首次访问门户需下发一次性缓存清理
+    res = await get('/');
+    const buildCookie = String(res.headers['set-cookie'] || '').match(/__gw_build=([^;]+)/);
+    check('门户首次访问下发缓存清理指令', res.headers['clear-site-data'] === '"cache"' && !!buildCookie, `${res.status} ${res.headers['clear-site-data']}`);
+    res = await get('/', { cookie: `__gw_build=${buildCookie ? buildCookie[1] : 'x'}` });
+    check('已清理客户端不重复清缓存', !res.headers['clear-site-data'], `${res.headers['clear-site-data']}`);
+
     console.log('\n[8] 管理接口与热重载');
     const login = await request({ port: gwPort, path: '/__gw/api/auth/login', method: 'POST', headers: { 'content-type': 'application/json' } }, JSON.stringify({ password: SMOKE_PASSWORD }));
     const token = JSON.parse(login.text).token;
