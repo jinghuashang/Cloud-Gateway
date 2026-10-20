@@ -986,11 +986,31 @@
       }
     }
 
+    /**
+     * 旧缓存可能把门户文档承载在某个子路径 URL 上（地址栏显示 /frp/ 但内容是门户），
+     * 造成"登录后被弹回门户"的错觉。检测到当前文档 URL 属于已注册路由时，强制重新加载该地址，
+     * 让请求真正落到对应应用。
+     */
+    function healMisroutedPortalUrl() {
+      const pathname = location.pathname.replace(/\/+$/, '') || '/';
+      if (pathname === '/' || pathname === '/index.html') return;
+      const ownedByRoute = (publicData.routes || []).some((route) => {
+        const sp = String(route.subpath || '').replace(/\/+$/, '');
+        return sp && (pathname === sp || pathname.startsWith(sp + '/'));
+      });
+      if (!ownedByRoute) return;
+      try {
+        // reload 会带着条件请求重新访问该子路径，从而拿到真实应用（或它的鉴权挑战）
+        location.reload();
+      } catch (e) { /* noop */ }
+    }
+
     async function init() {
       initTheme();
       await fetchPublicInfo();
       checkAuthStatus();
       setupSearch();
+      healMisroutedPortalUrl();
 
       // 事件委托：分类按钮与镜像行均为动态渲染，避免把配置值拼进内联 JS
       const categoryContainer = document.getElementById('categoryContainer');

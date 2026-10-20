@@ -1359,33 +1359,37 @@ app.use(dispatcher);
 const PORTAL_CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "connect-src 'self' https://unpkg.com",
   "frame-ancestors 'self'",
   "base-uri 'self'",
   "form-action 'self'"
 ].join('; ');
 
-app.use((req, res, next) => {
-  if (req.path === '/' || req.path === '/index.html') {
-    res.setHeader('Content-Security-Policy', PORTAL_CSP);
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-  }
-  next();
-});
-
-// 前端静态文件托管（门户首页）
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('*', (req, res) => {
+// 门户文档统一响应头：安全头 + 禁止缓存（防止旧门户被缓存后承载在子路径 URL 上）
+const applyPortalHeaders = (res) => {
   res.setHeader('Content-Security-Policy', PORTAL_CSP);
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+};
+
+// 门户首页：显式路由（先于静态托管），始终 no-store
+app.get(['/', '/index.html'], (req, res) => {
+  applyPortalHeaders(res);
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 静态资源（禁用目录索引，首页由上面的显式路由负责）
+app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: 0 }));
+
+app.get('*', (req, res) => {
+  applyPortalHeaders(res);
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
