@@ -389,6 +389,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// 旧版本遗留：门户文档曾被旧 catch-all 无缓存头地缓存到 /v2、/ani 等子路径 URL 上。
+// 任意请求只要没携带当前构建号 cookie，就下发一次同源 HTTP 缓存清理，让残留旧文档自动失效。
+app.use((req, res, next) => {
+  const seenBuild = String(req.headers.cookie || '').match(/(?:^|;\s*)__gw_build=([^;]+)/);
+  if (!seenBuild || seenBuild[1] !== BUILD_ID) {
+    res.setHeader('Clear-Site-Data', '"cache"');
+    res.append('Set-Cookie', `${BUILD_COOKIE}=${BUILD_ID}; Path=/; Max-Age=31536000; SameSite=Lax`);
+  }
+  next();
+});
+
 // 专用内部管理 API 前缀（使用 /__gw/api/）
 const apiRouter = express.Router();
 apiRouter.use(express.json());
@@ -1393,13 +1404,6 @@ const applyPortalHeaders = (res) => {
 // 门户首页：显式路由（先于静态托管），始终 no-store
 app.get(['/', '/index.html'], (req, res) => {
   applyPortalHeaders(res);
-  // 旧版本曾把门户文档缓存到 /v2/、/ani/ 等子路径（无缓存头的 catch-all），
-  // 升级后按构建号一次性清掉同源 HTTP 缓存，避免用户点服务时看到旧门户。
-  const seenBuild = String(req.headers.cookie || '').match(/(?:^|;\s*)__gw_build=([^;]+)/);
-  if (!seenBuild || seenBuild[1] !== BUILD_ID) {
-    res.setHeader('Clear-Site-Data', '"cache"');
-    res.append('Set-Cookie', `${BUILD_COOKIE}=${BUILD_ID}; Path=/; Max-Age=31536000; SameSite=Lax`);
-  }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
