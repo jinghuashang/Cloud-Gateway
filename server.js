@@ -1388,9 +1388,14 @@ app.get(['/', '/index.html'], (req, res) => {
 // 静态资源（禁用目录索引，首页由上面的显式路由负责）
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: 0 }));
 
-app.get('*', (req, res) => {
-  applyPortalHeaders(res);
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// 未注册路径：统一 302 回门户首页，绝不再把门户文档回落到任意子路径上。
+// 这样即使浏览器残留旧缓存，服务端也不会在 /frp/static/ 之类的地址返回门户。
+app.use((req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(404).json({ error: 'Not Found' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.redirect(302, '/');
 });
 
 // 统一错误处理：生产环境不回显堆栈，仅返回 requestId 供日志关联

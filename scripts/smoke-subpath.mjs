@@ -344,7 +344,7 @@ async function main() {
     res = await get('/websites');
     check('内置画像漂移路径 302 到 /um/websites', res.status === 302 && res.headers.location === '/um/websites', `${res.status} ${res.headers.location}`);
     res = await get('/shareddrift');
-    check('多应用声明同一漂移路径时不猜测', res.status === 200 && /Cloud Gateway|cloud-gateway/i.test(res.text), `${res.status} ${res.headers.location}`);
+    check('多应用声明同一漂移路径时不猜测', res.status === 302 && res.headers.location === '/', `${res.status} ${res.headers.location}`);
 
     console.log('\n[2] HTML 文档重写（含 css/srcset/poster/meta refresh/内联脚本）');
     res = await get('/app/', { 'accept-encoding': 'identity' });
@@ -502,7 +502,7 @@ async function main() {
     res = await get('/media/p.png');
     check('唯一归属的根路径请求被路由到应用', res.headers['x-fixture'] === 'asset', `${res.status}`);
     res = await get('/img/logo.png');
-    check('歧义根路径回落门户(不猜测)', res.status === 200 && /Cloud Gateway|cloud-gateway/i.test(res.text) && res.headers['x-fixture'] !== 'asset', `${res.status}`);
+    check('歧义根路径回落门户(不猜测)', res.status === 302 && res.headers.location === '/' && res.headers['x-fixture'] !== 'asset', `${res.status} ${res.headers.location}`);
     res = await get('/__gw/api/public/info');
     check('门户内部接口未被劫持', res.status === 200 && JSON.parse(res.text).routes.length === 9);
 
@@ -532,7 +532,7 @@ async function main() {
     const removed = await request({ port: gwPort, path: `/__gw/api/admin/routes/${createdRoute.id}`, method: 'DELETE', headers: authHeaders });
     check('删除路由成功', JSON.parse(removed.text).success === true);
     res = await get('/tmp');
-    check('删除后路由即时失效', res.status === 200 && /Cloud Gateway|cloud-gateway/i.test(res.text), `${res.status}`);
+    check('删除后路由即时失效', res.status === 302 && res.headers.location === '/', `${res.status} ${res.headers.location}`);
 
     console.log('\n[9] 内置兼容画像行为对齐');
     res = await get('/um/', { 'accept-encoding': 'identity' });
@@ -641,13 +641,13 @@ async function main() {
     const forcedDelete = await request({ port: gwPort, path: '/__gw/api/admin/profiles/crudprof?force=1', method: 'DELETE', headers: authHeaders });
     check('强制删除画像成功', forcedDelete.status === 200 && JSON.parse(forcedDelete.text).usedBy.includes('/crudx'));
     res = await get('/cpd');
-    check('删画像后路由降级为通用模式', res.status === 200 && /Cloud Gateway|cloud-gateway/i.test(res.text), `${res.status}`);
+    check('删画像后路由降级为通用模式', res.status === 302 && res.headers.location === '/', `${res.status} ${res.headers.location}`);
 
     const runtimeAfterDelete = JSON.parse((await request({ port: gwPort, path: '/__gw/api/admin/routes', headers: { authorization: `Bearer ${token}` } })).text).runtime || {};
     check('降级后运行时画像为 none', runtimeAfterDelete['/crudx'] && runtimeAfterDelete['/crudx'].profile === 'none');
 
     await request({ port: gwPort, path: `/__gw/api/admin/routes/${boundRoute.id}`, method: 'DELETE', headers: authHeaders });
-    check('测试路由已清理', (await get('/cpd')).status === 200);
+    check('测试路由已清理', (await get('/cpd')).status === 302);
 
     console.log('\n[12] 路由诊断');
     const authOnly = { authorization: `Bearer ${token}` };
