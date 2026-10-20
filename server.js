@@ -394,8 +394,10 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   const seenBuild = String(req.headers.cookie || '').match(/(?:^|;\s*)__gw_build=([^;]+)/);
   if (!seenBuild || seenBuild[1] !== BUILD_ID) {
+    const buildCookie = `${BUILD_COOKIE}=${BUILD_ID}; Path=/; Max-Age=31536000; SameSite=Lax`;
     res.setHeader('Clear-Site-Data', '"cache"');
-    res.append('Set-Cookie', `${BUILD_COOKIE}=${BUILD_ID}; Path=/; Max-Age=31536000; SameSite=Lax`);
+    res.locals.__gwBuildCookie = buildCookie;
+    res.append('Set-Cookie', buildCookie);
   }
   next();
 });
