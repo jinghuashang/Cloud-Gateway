@@ -993,13 +993,28 @@
      */
     function healMisroutedPortalUrl() {
       const pathname = location.pathname.replace(/\/+$/, '') || '/';
-      if (pathname === '/' || pathname === '/index.html') return;
+      if (pathname === '/' || pathname === '/index.html') {
+        // 回到正常入口后清理节流标记，允许以后再次自愈
+        try {
+          Object.keys(sessionStorage)
+            .filter((key) => key.startsWith('__gw_heal_'))
+            .forEach((key) => sessionStorage.removeItem(key));
+        } catch (e) { /* noop */ }
+        return;
+      }
       const ownedByRoute = (publicData.routes || []).some((route) => {
         const sp = String(route.subpath || '').replace(/\/+$/, '');
         return sp && (pathname === sp || pathname.startsWith(sp + '/'));
       });
       if (!ownedByRoute) return;
+      // 防循环：同一路径 60 秒内只允许自愈重载一次。
+      // 旧 catch-all/缓存层若在子路径仍然返回门户文档，无保护的 location.reload() 会变成无限刷新。
+      const healKey = `__gw_heal_${pathname}`;
+      let lastHeal = 0;
+      try { lastHeal = Number(sessionStorage.getItem(healKey)) || 0; } catch (e) { /* noop */ }
+      if (Date.now() - lastHeal < 60 * 1000) return;
       try {
+        sessionStorage.setItem(healKey, String(Date.now()));
         // reload 会带着条件请求重新访问该子路径，从而拿到真实应用（或它的鉴权挑战）
         location.reload();
       } catch (e) { /* noop */ }
