@@ -1359,6 +1359,26 @@ apiRouter.post('/admin/update/execute', authMiddleware, async (req, res) => {
   }
 });
 
+// 旧版门户文档可能被缓存/会话恢复在子路径 URL 上（如 /en/），而它仍会轮询门户内部 API。
+// 此时按 5 分钟节流下发一次缓存清理，让该文档下一次重载拿到真实应用，且不误伤正常门户（Referer 为 /）。
+app.use('/__gw/api', (req, res, next) => {
+  let refPath = '';
+  try {
+    refPath = new URL(String(req.headers.referer || '')).pathname;
+  } catch {
+    refPath = '';
+  }
+  if (refPath && refPath !== '/' && !refPath.startsWith('/__gw/')) {
+    const last = String(req.headers.cookie || '').match(/(?:^|;\s*)__gw_doc_purge=([^;]+)/);
+    const now = Date.now();
+    if (!last || !Number.isFinite(Number(last[1])) || now - Number(last[1]) > 5 * 60 * 1000) {
+      res.setHeader('Clear-Site-Data', '"cache"');
+      res.append('Set-Cookie', `__gw_doc_purge=${now}; Path=/; Max-Age=300; SameSite=Lax`);
+    }
+  }
+  next();
+});
+
 // 挂载专用管理接口（兼容 /__gw/api 与旧 /api/public/info）
 app.use('/__gw/api', apiRouter);
 app.get('/api/public/info', (req, res) => res.redirect(307, '/__gw/api/public/info'));

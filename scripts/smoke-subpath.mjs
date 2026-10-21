@@ -517,6 +517,14 @@ async function main() {
     check('反代响应同时下发构建号与路由 Cookie', /__gw_build=/.test(cookieList) && /__gw_active_subpath=/.test(cookieList), cookieList);
     res = await get('/app/', { 'accept-encoding': 'identity', cookie: `__gw_build=${buildCookie ? buildCookie[1] : 'x'}` });
     check('反代请求带构建号后不再清缓存', !res.headers['clear-site-data'], `${res.headers['clear-site-data']}`);
+    const buildCk = `__gw_build=${buildCookie ? buildCookie[1] : 'x'}`;
+    res = await get('/__gw/api/public/info', { cookie: buildCk, referer: 'http://gw.local/en/' });
+    const purgeMatch = String(res.headers['set-cookie'] || '').match(/__gw_doc_purge=(\d+)/);
+    check('子路径旧门户文档触发定向缓存清理', res.headers['clear-site-data'] === '"cache"' && !!purgeMatch, `${res.headers['clear-site-data']}`);
+    res = await get('/__gw/api/public/info', { cookie: `${buildCk}; __gw_doc_purge=${purgeMatch ? purgeMatch[1] : '0'}`, referer: 'http://gw.local/en/' });
+    check('定向缓存清理按 5 分钟节流', !res.headers['clear-site-data'], `${res.headers['clear-site-data']}`);
+    res = await get('/__gw/api/public/info', { cookie: buildCk, referer: 'http://gw.local/' });
+    check('正常门户不触发定向清理', !res.headers['clear-site-data'], `${res.headers['clear-site-data']}`);
 
     console.log('\n[8] 管理接口与热重载');
     const login = await request({ port: gwPort, path: '/__gw/api/auth/login', method: 'POST', headers: { 'content-type': 'application/json' } }, JSON.stringify({ password: SMOKE_PASSWORD }));
