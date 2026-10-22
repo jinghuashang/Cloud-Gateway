@@ -419,6 +419,7 @@ async function main() {
     res = await get('/rw/cookie');
     const rwCookies = res.headers['set-cookie'] || [];
     check('rewriteCookie 收敛 Path 到子目录', rwCookies.some((c) => /Path=\/rw\//i.test(c)), rwCookies.join(' | '));
+    check('rewriteCookie 保留根作用域 Path=/', rwCookies.some((c) => /^sid=abc; Path=\/(?:;|$)/i.test(c)), rwCookies.join(' | '));
     const rwAppCookies = rwCookies.filter((c) => !c.startsWith('__gw_'));
     check('rewriteCookie 修正 SameSite=None', rwAppCookies.length === 2 && rwAppCookies.every((c) => /samesite=none/i.test(c)), rwCookies.join(' | '));
 
