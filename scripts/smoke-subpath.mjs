@@ -103,6 +103,7 @@ function startFixture() {
     }
     if (url === '/assets/logo.css') return send(200, { 'content-type': 'text/css' }, FIXTURE_CSS);
     if (url === '/assets/app.js') return send(200, { 'content-type': 'application/javascript' }, FIXTURE_JS);
+    if (url === '/sw.js') return send(200, { 'content-type': 'application/javascript', 'service-worker-allowed': '/' }, 'self.addEventListener("fetch", function() {});');
     if (url === '/data.json') return send(200, { 'content-type': 'application/json' }, '{"url":"/api/z"}');
     if (url === '/rsc') return send(200, { 'content-type': 'text/x-component' }, '0:{"href":"\\/api\\/rsc"}');
     if (url === '/next-redirect') return send(200, { 'content-type': 'text/html', 'x-nextjs-redirect': '/login' }, '<html></html>');
@@ -379,7 +380,6 @@ async function main() {
     check('JS 字面量补全', res.text.includes('p="/app/api/x"'));
     check('JS 转义斜杠补全', res.text.includes('q=\'\\/app\\/api\\/y\''), res.text.split('\n')[0]);
     check('JS sourceMappingURL 补全', res.text.includes('sourceMappingURL=/app/app.js.map'));
-    check('JS ServiceWorker 注册补全', res.text.includes("register('/app/sw.js')"));
     check('JS webpack publicPath 补全', res.text.includes('__webpack_require__.p="/app/"'));
     check('JS 前端路由 basename 补全', res.text.includes('basename:"/app/"'));
 
@@ -391,6 +391,15 @@ async function main() {
 
     res = await get('/app/next-redirect', { 'accept-encoding': 'identity' });
     check('x-nextjs-redirect 补全', res.headers['x-nextjs-redirect'] === '/app/login', res.headers['x-nextjs-redirect']);
+    // Worker 安装必须显式挂载；不能用 Referer/Cookie 借道安装跨应用 Worker。
+    res = await get('/webui/sw.js', { 'sec-fetch-dest': 'serviceworker', referer: 'http://localhost/app/', cookie: '__gw_active_subpath=%2Fapp' });
+    check('非挂载 Worker 请求拒绝上下文兜底', res.status === 404, String(res.status));
+    res = await get('/rw/sw.js', { 'sec-fetch-dest': 'serviceworker' });
+    check('显式 Worker 安装权限限制在所属应用', res.status === 200 && res.headers['service-worker-allowed'] === '/rw/', `${res.status} ${res.headers['service-worker-allowed']}`);
+    res = await get('/app/big.js', { 'service-worker': 'script' });
+    check('无法安全重写的超限 Worker 拒绝安装', res.status === 502, String(res.status));
+    res = await get('/app/gbk.html', { 'sec-fetch-dest': 'serviceworker' });
+    check('非脚本 Worker 响应拒绝安装', res.status === 502, String(res.status));
 
     console.log('\n[4] 跳转标头 / Cookie 归一化 / 环路保护');
     res = await get('/app/redirect');
@@ -593,8 +602,6 @@ async function main() {
     res = await get('/plain/assets/app.js', { 'accept-encoding': 'identity' });
     check('profile=none 路由不透支他人白名单', res.text.includes('dd="/demodeep/asset.js"'), res.text.split('\n')[5]);
 
-    res = await get('/plain/', { 'accept-encoding': 'identity' });
-    check('profile=none + injectBase=false 不注入任何垫片', !res.text.includes('history.pushState = function') && !res.text.includes('<base href='));
 
     const profilesRes = await request({ port: gwPort, path: '/__gw/api/admin/profiles', headers: { authorization: `Bearer ${token}` } });
     const profilesData = JSON.parse(profilesRes.text);

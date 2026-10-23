@@ -2,6 +2,8 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <!-- 先定向注销旧根 Worker；原有 heal 仅兼容普通 HTTP 文档缓存。 -->
+  <script src="/__gw/sw-recovery.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Cloud Gateway - 生产级统一二级目录反代网关与聚合门户</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230a0a0a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='20' height='14' x='2' y='5' rx='2'/><path d='M2 10h20'/></svg>">

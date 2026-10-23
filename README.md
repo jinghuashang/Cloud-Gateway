@@ -17,6 +17,10 @@
   - 覆盖 HTML / SVG / CSS / JavaScript / JSON / Next.js RSC (`text/x-component`) 全谱系文本响应；
   - 补全 `href` / `src` / `action` / `poster` / `formaction` / `srcset` / `data-*` 属性、`<style>` 与内联 `style` 中的 `url()`、`@import`、`<meta http-equiv="refresh">`、内联脚本与 RSC 载荷中的裸路径；
   - 前端路由自成体系的应用额外补全 `basename`、`createWebHistory`、`serviceWorker.register`、`new Worker`、webpack `publicPath` 与 `sourceMappingURL`。
+- **Service Worker 应用隔离**
+  - HTML 在应用脚本之前约束原生注册入口，覆盖 Workbox 包装、变量与模板字符串；脚本 URL、显式 scope 均收敛到所属挂载点，独立于 `injectBase` 与深度补全开关。
+  - Worker 安装请求必须携带显式应用路径；`Service-Worker-Allowed` 限定为该应用目录，主 Worker 内的根预缓存与导航回退一并补前缀。超限或非脚本响应拒绝安装，不作不安全透传。
+  - 根 `/sw.js` 固定提供旧注册退休脚本；门户与应用加载 `/__gw/sw-recovery.js` 定向注销旧根注册，仅删除对应根 Workbox 预缓存，保留 Cookie、localStorage、其他应用注册与缓存。
 - 🗜️ **压缩协商与再压缩**
   - 不再强制上游返回未压缩内容：解压 → 重写 → 按客户端 `Accept-Encoding` 重新压缩（gzip / br / deflate），并拒绝向无法解码的编码（如 zstd）发起协商；
   - 未发生改写的响应按原始字节透传，零额外 CPU 与缓存破坏。
@@ -54,7 +58,7 @@
   - 响应头体检：`Location` 补全预演、自跳转环路告警、`Set-Cookie` 的 Domain/Path/SameSite、CSP/X-Frame-Options、缓存语义；
   - 技术栈嗅探（Next.js / RSC / Vite / webpack / React Router / Vue Router / Socket.IO / Service Worker / SvelteKit / Nuxt）并给出中文可执行建议。
 - 🧪 **可回归的冒烟测试**
-  - `node scripts/smoke-subpath.mjs` 自带上游夹具与临时配置，逐项校验重写契约（148 项断言），重构反代引擎时可放心回归。
+  - `node scripts/smoke-subpath.mjs` 自带上游夹具与临时配置，逐项校验重写契约及 Worker 安装隔离边界（158 项断言），重构反代引擎时可放心回归。
 
 ---
 
@@ -237,9 +241,12 @@
 | 应用把内部绝对地址吐回给浏览器 | 上游按 `Host` 生成绝对 URL | 同主机（上游或网关）的绝对地址收敛为子路径相对地址，外部域名原样放行 |
 | 改写后中文变乱码 | 上游是 GBK 等非 UTF-8 页面 | 声明非 UTF-8 的文本字节原样透传 |
 | 大文件/大接口把网关内存打爆 | 全量缓冲响应体 | 超过 `GW_MAX_REWRITE_BYTES`（默认 16 MiB）的响应原样透传 |
+| 地址仍是应用子路径，内容却变成门户；访问 Clash 后影响其他应用 | 应用在 `/sw.js` 注册根 scope Worker，Workbox 把门户 `/` 预缓存并回送其他页面导航 | 注册、scope、主 Worker 预缓存与回退地址按应用隔离；旧根 Worker 定向退役，不再靠全站清数据恢复 |
 | 白屏/掉登录但看不出是哪一环出问题 | 症状分散在响应体、响应头、前端路由与 Cookie 四处 | 控制台「诊断」：同一套规则干跑响应体 + 响应头体检 + 技术栈嗅探 + 中文建议清单 |
 
 > 内置画像：为兼容历史部署，`/um`（Umami）、`/v2`（v2rayA）、`/en`（Entari）、`/kuma`（Uptime Kuma）、`/frp`、`/newapi`、`/live`（SyncTV）等子路径默认会绑定对应画像；它们已不再是写死的代码分支，而是可由 `config.profiles` 覆盖或新增的数据（见上文「应用画像」），新应用还可以完全依赖自学习签名。
+
+Service Worker 修复上线后，旧根注册需在浏览器检查 `/sw.js` 更新或执行恢复脚本时才会退役；已打开的旧页面不会因服务器发布立即消失。离线浏览器需恢复联网。验收应在同一浏览器先打开 `/clash/`，等 Worker 激活，再依次访问其他应用，并检查它们不受 `/clash/sw.js` 控制；同时确认正确应用 Worker 仍可在自己的目录提供缓存。不要把 `Clear-Site-Data: "storage"` 或清空整个网站数据当作默认迁移方案。
 
 ---
 

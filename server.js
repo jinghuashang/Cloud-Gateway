@@ -389,6 +389,80 @@ app.use((req, res, next) => {
   next();
 });
 
+// 根 /sw.js 曾被应用越界注册：固定返回退休脚本，绝不按 active Cookie 透传上游。
+// 这两个迁移入口也必须早于旧版 HTTP 缓存兼容中间件，避免附带全站缓存清理。
+const ROOT_SW_RETIREMENT_SCRIPT = String.raw`
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    // 只恢复本 worker 控制的窗口，不接管其他应用的 clients。
+    const windows = await self.clients.matchAll({ type: 'window' });
+    await self.registration.unregister();
+    await self.caches.delete('workbox-precache-v2-' + self.location.origin + '/').catch(() => false);
+    await Promise.all(windows.map((client) => client.navigate(client.url).catch(() => null)));
+  })());
+});
+`;
+
+const SW_RECOVERY_SCRIPT = String.raw`
+(() => {
+  if (!('serviceWorker' in navigator)) return;
+  const isLegacyWorker = (worker) => {
+    if (!worker) return false;
+    try {
+      const url = new URL(worker.scriptURL);
+      return url.origin === location.origin && url.pathname === '/sw.js';
+    } catch {
+      return false;
+    }
+  };
+  const isLegacyRegistration = (registration) => {
+    try {
+      const scope = new URL(registration.scope);
+      return scope.origin === location.origin && scope.pathname === '/' &&
+        [registration.active, registration.waiting, registration.installing].some(isLegacyWorker);
+    } catch {
+      return false;
+    }
+  };
+  (async () => {
+    const wasControlled = isLegacyWorker(navigator.serviceWorker.controller);
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    const removed = await Promise.all(registrations.filter(isLegacyRegistration)
+      .map((registration) => registration.unregister().catch(() => false)));
+    // 仅删除已实证污染门户的根 Workbox 缓存，不触及其他应用缓存或用户数据。
+    if ('caches' in window) {
+      await window.caches.delete('workbox-precache-v2-' + location.origin + '/').catch(() => false);
+    }
+    // 注销成功才重载：即使 sessionStorage 被禁用，下一页也不会因同一注册反复刷新。
+    if (!wasControlled || !removed.some(Boolean)) return;
+    try {
+      const key = '__gw_sw_recovery_v1';
+      const now = Date.now();
+      const last = Number(sessionStorage.getItem(key)) || 0;
+      if (now - last < 60 * 1000) return;
+      sessionStorage.setItem(key, String(now));
+    } catch { /* 存储不可用不能阻止定向恢复。 */ }
+    location.reload();
+  })().catch(() => { /* 无 Service Worker 访问权限时不影响页面正常加载。 */ });
+})();
+`;
+
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.send(ROOT_SW_RETIREMENT_SCRIPT);
+});
+
+app.get('/__gw/sw-recovery.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(SW_RECOVERY_SCRIPT);
+});
+
 // 旧版本遗留：门户文档曾被旧 catch-all 无缓存头地缓存到 /v2、/ani 等子路径 URL 上。
 // 任意请求只要没携带当前构建号 cookie，就下发一次同源 HTTP 缓存清理，让残留旧文档自动失效。
 app.use((req, res, next) => {
