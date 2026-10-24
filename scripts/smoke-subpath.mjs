@@ -104,7 +104,7 @@ function startFixture() {
     if (url === '/assets/logo.css') return send(200, { 'content-type': 'text/css' }, FIXTURE_CSS);
     if (url === '/assets/app.js') return send(200, { 'content-type': 'application/javascript' }, FIXTURE_JS);
     if (url === '/sw.js') return send(200, { 'content-type': 'application/javascript', 'service-worker-allowed': '/' }, 'self.addEventListener("fetch", function() {});');
-    if (url === '/assets/icon.svg') return send(200, { 'content-type': 'image/svg+xml' }, '<svg xmlns="http://www.w3.org/2000/svg"><image href="/img/logo.png"/></svg>');
+    if (url === '/assets/icon.svg') return send(200, { 'content-type': 'image/svg+xml', etag: 'W/"svg-v1"', 'last-modified': new Date(0).toUTCString(), 'cache-control': 'no-cache' }, '<svg xmlns="http://www.w3.org/2000/svg"><image href="/img/logo.png"/></svg>');
     if (url === '/data.json') return send(200, { 'content-type': 'application/json' }, '{"url":"/api/z"}');
     if (url === '/rsc') return send(200, { 'content-type': 'text/x-component' }, '0:{"href":"\\/api\\/rsc"}');
     if (url === '/next-redirect') return send(200, { 'content-type': 'text/html', 'x-nextjs-redirect': '/login' }, '<html></html>');
@@ -387,6 +387,9 @@ async function main() {
     res = await get('/app/assets/icon.svg', { 'accept-encoding': 'identity' });
     check('SVG 文档不注入 base/history 垫片', res.text.includes('<svg') && !res.text.includes('<base href=') && !res.text.includes('history.pushState'), res.text.slice(0, 120));
     check('SVG 内图片引用仍补全', res.text.includes('href="/app/img/logo.png"'), res.text);
+    check('SVG 响应不再下发旧校验器', !res.headers.etag && !res.headers['last-modified'], `${res.headers.etag} ${res.headers['last-modified']}`);
+    res = await get('/app/assets/icon.svg', { 'accept-encoding': 'identity', 'if-none-match': 'W/"svg-v1"' });
+    check('SVG 条件请求绕过旧缓存', res.status === 200 && res.text.includes('<svg'), `${res.status} ${res.text.slice(0, 60)}`);
 
     res = await get('/app/data.json', { 'accept-encoding': 'identity' });
     check('JSON 字面量补全', res.text.includes('"/app/api/z"'));
