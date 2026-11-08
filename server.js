@@ -534,7 +534,7 @@ function authMiddleware(req, res, next) {
 // 1. 公开接口：获取导航展示卡片及站点配置（仅此两处允许跨域读取）
 apiRouter.get('/public/info', cors(), (req, res) => {
   const publicRoutes = (config.routes || [])
-    .filter((r) => r.enabled)
+    .filter((r) => r.enabled && r.publicVisible !== false)
     .sort((a, b) => (a.order || 99) - (b.order || 99))
     .map((r) => ({
       id: r.id,
@@ -546,6 +546,8 @@ apiRouter.get('/public/info', cors(), (req, res) => {
       order: r.order || 99
     }));
 
+  // 可见性随配置即时变化，禁止浏览器与中间缓存保留旧清单。
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     siteTitle: config.siteTitle,
     siteSubtitle: config.siteSubtitle,
@@ -709,7 +711,7 @@ apiRouter.post('/admin/reload', authMiddleware, (req, res) => {
 
 // 5. 管理接口：创建路由
 apiRouter.post('/admin/routes', authMiddleware, (req, res) => {
-  const { name, category, icon, description, subpath, target, enabled, order, options } = req.body || {};
+  const { name, category, icon, description, subpath, target, enabled, order, options, publicVisible } = req.body || {};
   if (!name || !subpath || !target) {
     return res.status(400).json({ error: '名称、二级目录路径、目标地址为必填项' });
   }
@@ -738,6 +740,7 @@ apiRouter.post('/admin/routes', authMiddleware, (req, res) => {
     subpath: cleanSub,
     target: targetCheck.target,
     enabled: enabled !== false,
+    publicVisible: publicVisible !== false,
     order: Number(order) || (config.routes.length + 1),
     options: sanitizeOptionsInput(options, {
       autoSlash: true,
@@ -764,7 +767,7 @@ apiRouter.put('/admin/routes/:id', authMiddleware, (req, res) => {
   }
 
   const cur = config.routes[idx];
-  const { name, category, icon, description, subpath, target, enabled, order, options } = req.body || {};
+  const { name, category, icon, description, subpath, target, enabled, order, options, publicVisible } = req.body || {};
   const cleanSub = subpath !== undefined ? sanitizeSubpath(subpath) : sanitizeSubpath(cur.subpath);
   if (cleanSub === '') {
     return res.status(400).json({ error: '子路径只能包含字母/数字/点/下划线/短横线/斜杠，且不能包含点段或编码字符（长度 2-64）' });
@@ -793,6 +796,7 @@ apiRouter.put('/admin/routes/:id', authMiddleware, (req, res) => {
     subpath: cleanSub,
     target: nextTarget,
     enabled: enabled !== undefined ? !!enabled : cur.enabled,
+    publicVisible: publicVisible !== undefined ? publicVisible === true : cur.publicVisible !== false,
     order: order !== undefined ? Number(order) : cur.order,
     options: sanitizeOptionsInput(options, cur.options || {})
   };

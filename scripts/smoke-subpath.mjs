@@ -551,21 +551,29 @@ async function main() {
 
     const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
     const created = await request({ port: gwPort, path: '/__gw/api/admin/routes', method: 'POST', headers: authHeaders }, JSON.stringify({
-      name: 'Temp Route', subpath: '/tmp', target: `http://127.0.0.1:${fixturePort}`, enabled: true, order: 9,
+      name: 'Temp Route', subpath: '/tmp', target: `http://127.0.0.1:${fixturePort}`, enabled: true, order: 9, publicVisible: false,
       options: { rewriteCookie: true, autoSlash: false, legacyJunk: 'drop-me', signaturePaths: ['/legacy'] }
     }));
     const createdRoute = JSON.parse(created.text).route;
     check('新增路由选项被归一化落盘', createdRoute.options.rewriteCookie === true && createdRoute.options.autoSlash === false && createdRoute.options.legacyJunk === undefined);
     check('签名/漂移路径列表落盘', Array.isArray(createdRoute.options.signaturePaths) && createdRoute.options.signaturePaths[0] === '/legacy');
+    check('未登录可见开关落盘', createdRoute.publicVisible === false);
+
+    res = await get('/__gw/api/public/info');
+    check('未登录首页隐藏私有项目', !JSON.parse(res.text).routes.some((r) => r.subpath === '/tmp'));
+    check('公开清单禁止缓存', res.headers['cache-control'] === 'no-store', String(res.headers['cache-control']));
 
     res = await get('/tmp');
     check('新增路由热生效且 autoSlash=false 不跳转', res.status === 200, `${res.status} ${res.headers.location}`);
     res = await get('/legacy/probe');
     check('声明式签名路径生效', res.headers['x-fixture'] === 'asset' || res.status === 404, `${res.status}`);
 
-    const updated = await request({ port: gwPort, path: `/__gw/api/admin/routes/${createdRoute.id}`, method: 'PUT', headers: authHeaders }, JSON.stringify({ options: { rewriteCookie: false } }));
+    const updated = await request({ port: gwPort, path: `/__gw/api/admin/routes/${createdRoute.id}`, method: 'PUT', headers: authHeaders }, JSON.stringify({ options: { rewriteCookie: false }, publicVisible: true }));
     const updatedRoute = JSON.parse(updated.text).route;
     check('修改路由保留未提交选项', updatedRoute.options.autoSlash === false && updatedRoute.options.rewriteCookie === false);
+    check('未登录可见开关可恢复', updatedRoute.publicVisible === true);
+    res = await get('/__gw/api/public/info');
+    check('恢复公开后重新出现在首页', JSON.parse(res.text).routes.some((r) => r.subpath === '/tmp'));
 
     const removed = await request({ port: gwPort, path: `/__gw/api/admin/routes/${createdRoute.id}`, method: 'DELETE', headers: authHeaders });
     check('删除路由成功', JSON.parse(removed.text).success === true);

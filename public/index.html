@@ -510,6 +510,14 @@
           <textarea id="formDescription" rows="2" placeholder="简短功能描述..." class="w-full px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-[#09090b] dark:text-[#fafafa]"></textarea>
         </div>
 
+        <label class="flex items-start gap-2 p-2.5 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+          <input type="checkbox" id="formPublicVisible" class="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-0">
+          <div>
+            <div class="font-medium text-[#09090b] dark:text-[#fafafa]">未登录时在首页显示</div>
+            <div class="text-[10px] text-[#71717a] dark:text-[#a1a1aa] leading-tight mt-0.5">关闭后仅管理员登录可见；子路径本身仍可直接访问，不等同于访问控制</div>
+          </div>
+        </label>
+
         <!-- 高级反代特性与自动补全二级目录控制开关 -->
         <div class="pt-2.5 border-t border-zinc-100 dark:border-zinc-800 space-y-2">
           <div class="flex items-center justify-between">
@@ -1025,7 +1033,7 @@
     async function init() {
       initTheme();
       await fetchPublicInfo();
-      checkAuthStatus();
+      await checkAuthStatus();
       setupSearch();
       healMisroutedPortalUrl();
 
@@ -1211,26 +1219,62 @@
       try {
         const res = await fetch('/__gw/api/public/info');
         publicData = await res.json();
+        await mergeAdminRoutesIfAuthenticated();
 
         document.getElementById('navSiteTitle').textContent = publicData.siteTitle || 'Cloud Gateway';
         if (publicData.siteSubtitle) {
           document.getElementById('heroSubtitle').textContent = publicData.siteSubtitle;
         }
         document.title = `${publicData.siteTitle || 'Cloud Gateway'} - 生产级统一二级目录反代网关与聚合门户`;
-        
-        const count = publicData.routes ? publicData.routes.length : 0;
-        document.getElementById('statTotal').textContent = count;
-        document.getElementById('serviceBadgeCount').textContent = `${count} 个项目`;
 
-        renderQuickTags();
-        renderCategories();
-        renderServiceCards();
+        renderHomeRouteStats();
         if (publicData.trafficStats) {
           renderTrafficChart(publicData.trafficStats);
         }
       } catch (err) {
         console.error('Failed to fetch public info:', err);
       }
+    }
+
+    /**
+     * 登录后合并管理端路由：未登录隐藏的项目只对管理员展示，
+     * 匿名访客始终只拿到 /public/info 过滤后的清单。
+     */
+    async function mergeAdminRoutesIfAuthenticated() {
+      if (!authToken) return;
+      try {
+        const res = await fetch('/__gw/api/admin/routes', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        adminRoutes = data.routes || [];
+        runtimeState = data.runtime || {};
+        publicData.routes = adminRoutes
+          .filter((r) => r.enabled !== false)
+          .sort((a, b) => (a.order || 99) - (b.order || 99))
+          .map((r) => ({
+            id: r.id,
+            name: r.name,
+            category: r.category || '常用服务',
+            icon: r.icon || 'globe',
+            description: r.description || '',
+            subpath: r.subpath,
+            order: r.order || 99
+          }));
+      } catch (err) {
+        console.error('Failed to merge admin routes:', err);
+      }
+    }
+
+    function renderHomeRouteStats() {
+      const count = publicData.routes ? publicData.routes.length : 0;
+      document.getElementById('statTotal').textContent = count;
+      document.getElementById('serviceBadgeCount').textContent = `${count} 个项目`;
+      renderQuickTags();
+      renderCategories();
+      renderServiceCards();
+      if (window.lucide) lucide.createIcons();
     }
 
     function renderQuickTags() {
@@ -1580,6 +1624,8 @@
         if (res.ok) {
         btnText.textContent = '控制台';
         checkUpdateStatusOnAuth();
+        await mergeAdminRoutesIfAuthenticated();
+        renderHomeRouteStats();
       }
         else handleLogout();
       } catch (e) {
@@ -2013,6 +2059,7 @@
                 ${renderIcon(r.icon)}
               </div>
               <span>${escapeHtml(r.name)}</span>
+              ${r.publicVisible === false ? '<span class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">未登录隐藏</span>' : ''}
             </div>
             ${profileBadge(r.subpath) ? `<div class="mt-1 ml-8 text-[10px] font-mono text-[#a1a1aa] dark:text-[#71717a]">${escapeHtml(profileBadge(r.subpath))}</div>` : ''}
           </td>
@@ -2044,6 +2091,7 @@
                 ${renderIcon(r.icon)}
               </div>
               <span class="font-semibold text-xs text-[#09090b] dark:text-[#fafafa] truncate">${escapeHtml(r.name)}</span>
+              ${r.publicVisible === false ? '<span class="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 shrink-0">未登录隐藏</span>' : ''}
             </div>
             <button onclick="toggleRouteStatus('${r.id}')" class="px-2 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${
               r.enabled ? 'bg-zinc-200 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa]' : 'text-zinc-400'
@@ -2132,6 +2180,7 @@
         document.getElementById('formIcon').value = r.icon || '';
         document.getElementById('formOrder').value = r.order || 1;
         document.getElementById('formDescription').value = r.description || '';
+        document.getElementById('formPublicVisible').checked = r.publicVisible !== false;
         document.getElementById('formAutoPrefixSubpath').checked = r.options?.autoPrefixSubpath !== false;
         document.getElementById('formRewriteLocation').checked = r.options?.rewriteLocation !== false;
         document.getElementById('formRewriteHtml').checked = r.options?.rewriteHtml !== false;
@@ -2149,6 +2198,7 @@
         document.getElementById('formIcon').value = 'globe';
         document.getElementById('formOrder').value = adminRoutes.length + 1;
         document.getElementById('formDescription').value = '';
+        document.getElementById('formPublicVisible').checked = true;
         document.getElementById('formAutoPrefixSubpath').checked = true;
         document.getElementById('formRewriteLocation').checked = true;
         document.getElementById('formRewriteHtml').checked = true;
@@ -2179,6 +2229,7 @@
         icon: document.getElementById('formIcon').value,
         order: Number(document.getElementById('formOrder').value) || 1,
         description: document.getElementById('formDescription').value,
+        publicVisible: document.getElementById('formPublicVisible').checked,
         options: {
           autoPrefixSubpath: document.getElementById('formAutoPrefixSubpath').checked,
           rewriteLocation: document.getElementById('formRewriteLocation').checked,
