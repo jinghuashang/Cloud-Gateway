@@ -927,6 +927,52 @@ apiRouter.post('/admin/test-target', authMiddleware, (req, res) => {
   }
 });
 
+// 10.1 管理接口：批量探测已启用路由的上游在线状态
+function probeUpstream(target, insecureTLS, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const checked = validateProbeUrl(target);
+    if (!checked.ok) return resolve({ online: false, error: checked.error, latency: 0 });
+    const start = Date.now();
+    const client = checked.url.protocol === 'https:' ? https : http;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    try {
+      const probeReq = client.get(checked.url.toString(), {
+        timeout: timeoutMs,
+        rejectUnauthorized: insecureTLS !== true
+      }, (probeRes) => {
+        probeRes.resume();
+        finish({
+          online: probeRes.statusCode < 500,
+          statusCode: probeRes.statusCode,
+          latency: Date.now() - start
+        });
+      });
+      probeReq.on('error', (err) => finish({ online: false, error: err.code || '连接失败', latency: Date.now() - start }));
+      probeReq.on('timeout', () => {
+        probeReq.destroy();
+        finish({ online: false, error: '连接超时', latency: Date.now() - start });
+      });
+    } catch (err) {
+      finish({ online: false, error: '连接失败', latency: Date.now() - start });
+    }
+  });
+}
+
+apiRouter.get('/admin/routes/health', authMiddleware, async (req, res) => {
+  const routes = (config.routes || []).filter((r) => r.enabled !== false);
+  const entries = await Promise.all(routes.map(async (r) => {
+    const result = await probeUpstream(r.target, r.options && r.options.insecureTLS);
+    return [r.id, { subpath: r.subpath, ...result }];
+  }));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ checkedAt: Date.now(), health: Object.fromEntries(entries) });
+});
+
 // ======================= 自动检测与 GitHub 镜像更新引擎 =======================
 const DEFAULT_GITHUB_MIRRORS = [
   { id: 'mirror_ghproxy', name: 'GhProxy 公益加速 (推荐)', url: 'https://ghproxy.net', type: 'proxy' },

@@ -966,6 +966,7 @@
     let adminRoutes = [];
     let adminProfiles = null;
     let runtimeState = {};
+    let routeHealth = {};
     let currentCategory = '全部';
     let searchQuery = '';
     let authToken = localStorage.getItem('cloud_gateway_token') || '';
@@ -1682,8 +1683,28 @@
           await loadAdminProfiles();
         }
         renderAdminUI();
+        fetchRouteHealth();
       } catch (err) {
         console.error('Failed to fetch routes:', err);
+      }
+    }
+
+    let healthRequestSeq = 0;
+    async function fetchRouteHealth() {
+      const seq = ++healthRequestSeq;
+      try {
+        const res = await fetch('/__gw/api/admin/routes/health', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (seq !== healthRequestSeq) return;
+        routeHealth = data.health || {};
+        if (!document.getElementById('adminPanel').classList.contains('hidden')) {
+          renderAdminUI();
+        }
+      } catch (err) {
+        console.error('Failed to fetch route health:', err);
       }
     }
 
@@ -2048,10 +2069,46 @@
       return parts.join(' · ');
     }
 
+    function routeStatusMeta(r) {
+      if (!r.enabled) {
+        return {
+          label: '已关闭',
+          cls: 'border-black bg-black text-white dark:border-zinc-600 dark:bg-black dark:text-white',
+          dot: 'bg-white',
+          title: '点击启用'
+        };
+      }
+      const health = routeHealth[r.id];
+      if (!health) {
+        return {
+          label: '检测中',
+          cls: 'border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400',
+          dot: 'bg-zinc-400',
+          title: '正在探测上游状态'
+        };
+      }
+      if (health.online) {
+        return {
+          label: '在线',
+          cls: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300',
+          dot: 'bg-emerald-500',
+          title: health.latency ? `在线 · ${health.latency}ms` : '在线'
+        };
+      }
+      return {
+        label: '离线',
+        cls: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300',
+        dot: 'bg-rose-500',
+        title: health.error ? `离线 · ${health.error}` : '离线'
+      };
+    }
+
     function renderAdminUI() {
       // 1. 桌面端表格
       const tbody = document.getElementById('adminTableBody');
-      tbody.innerHTML = adminRoutes.map((r, idx) => `
+      tbody.innerHTML = adminRoutes.map((r, idx) => {
+        const status = routeStatusMeta(r);
+        return `
         <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-850/50 transition-colors">
           <td class="py-3 px-6 font-medium text-[#09090b] dark:text-[#fafafa]">
             <div class="flex items-center gap-2">
@@ -2066,10 +2123,9 @@
           <td class="py-3 px-4 font-mono font-medium text-[#09090b] dark:text-[#fafafa]">${escapeHtml(r.subpath)}/</td>
           <td class="py-3 px-4 font-mono text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(r.target)}</td>
           <td class="py-3 px-4 text-center">
-            <button onclick="toggleRouteStatus('${r.id}')" class="px-2 py-0.5 rounded-full text-[10px] font-medium ${
-              r.enabled ? 'bg-zinc-100 text-[#09090b] dark:bg-zinc-800 dark:text-[#fafafa]' : 'text-zinc-400'
-            }">
-              ${r.enabled ? '● 运行中' : '○ 已停用'}
+            <button onclick="toggleRouteStatus('${r.id}')" title="${status.title}" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${status.cls}">
+              <span class="w-1.5 h-1.5 rounded-full ${status.dot}"></span>
+              ${status.label}
             </button>
           </td>
           <td class="py-3 px-6">
@@ -2086,11 +2142,14 @@
             </div>
           </td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
 
       // 2. 移动端卡片视图 (彻底杜绝文字竖排挤压！)
       const mobileList = document.getElementById('adminMobileList');
-      mobileList.innerHTML = adminRoutes.map((r, idx) => `
+      mobileList.innerHTML = adminRoutes.map((r, idx) => {
+        const status = routeStatusMeta(r);
+        return `
         <div class="p-3.5 rounded-xl bg-zinc-50/60 dark:bg-zinc-800/60/60 border border-zinc-200/60 dark:border-zinc-800 space-y-2.5">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
@@ -2100,10 +2159,9 @@
               <span class="font-semibold text-xs text-[#09090b] dark:text-[#fafafa] truncate">${escapeHtml(r.name)}</span>
               ${r.publicVisible === false ? '<span class="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 shrink-0">未登录隐藏</span>' : ''}
             </div>
-            <button onclick="toggleRouteStatus('${r.id}')" class="px-2 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${
-              r.enabled ? 'bg-zinc-200 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa]' : 'text-zinc-400'
-            }">
-              ${r.enabled ? '● 运行中' : '○ 已停用'}
+            <button onclick="toggleRouteStatus('${r.id}')" title="${status.title}" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border shrink-0 ${status.cls}">
+              <span class="w-1.5 h-1.5 rounded-full ${status.dot}"></span>
+              ${status.label}
             </button>
           </div>
 
@@ -2136,7 +2194,8 @@
             </button>
           </div>
         </div>
-      `).join('');
+      `;
+      }).join('');
 
       if (window.lucide) lucide.createIcons();
     }

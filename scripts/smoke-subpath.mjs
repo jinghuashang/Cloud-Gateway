@@ -550,6 +550,14 @@ async function main() {
     check('管理员登录成功', login.status === 200 && !!token);
 
     const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
+
+    const healthRes = await request({ port: gwPort, path: '/__gw/api/admin/routes/health', headers: authHeaders });
+    const healthBySub = Object.values(JSON.parse(healthRes.text).health || {}).reduce((acc, item) => {
+      acc[item.subpath] = item;
+      return acc;
+    }, {});
+    check('健康检查：可达上游为在线', healthBySub['/app'] && healthBySub['/app'].online === true, JSON.stringify(healthBySub['/app']));
+    check('健康检查：不可达上游为离线', healthBySub['/dead'] && healthBySub['/dead'].online === false, JSON.stringify(healthBySub['/dead']));
     const created = await request({ port: gwPort, path: '/__gw/api/admin/routes', method: 'POST', headers: authHeaders }, JSON.stringify({
       name: 'Temp Route', subpath: '/tmp', target: `http://127.0.0.1:${fixturePort}`, enabled: true, order: 9,
       options: { rewriteCookie: true, autoSlash: false, legacyJunk: 'drop-me', signaturePaths: ['/legacy'] }

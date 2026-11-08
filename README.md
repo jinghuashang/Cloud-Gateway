@@ -57,8 +57,10 @@
   - 用**与线上完全相同**的重写规则干跑一次响应体，逐条列出"哪些引用会被补全、哪些被白名单跳过"，不会出现"诊断说没事、线上却 404"的偏差；
   - 响应头体检：`Location` 补全预演、自跳转环路告警、`Set-Cookie` 的 Domain/Path/SameSite、CSP/X-Frame-Options、缓存语义；
   - 技术栈嗅探（Next.js / RSC / Vite / webpack / React Router / Vue Router / Socket.IO / Service Worker / SvelteKit / Nuxt）并给出中文可执行建议。
+- 🚦 **控制台三态状态灯**
+  - **在线**显示绿色、**离线**显示红色、**已关闭**显示黑色；打开控制台时并发探测已启用路由的上游，接口为 `GET /__gw/api/admin/routes/health`。
 - 🧪 **可回归的冒烟测试**
-  - `node scripts/smoke-subpath.mjs` 自带上游夹具与临时配置，逐项校验重写契约及 Worker 安装隔离边界（158 项断言），重构反代引擎时可放心回归。
+  - `node scripts/smoke-subpath.mjs` 自带上游夹具与临时配置，逐项校验重写契约及 Worker 安装隔离边界（173 项断言），重构反代引擎时可放心回归。
 
 ---
 
