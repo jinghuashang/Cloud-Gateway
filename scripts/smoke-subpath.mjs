@@ -551,17 +551,26 @@ async function main() {
 
     const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
     const created = await request({ port: gwPort, path: '/__gw/api/admin/routes', method: 'POST', headers: authHeaders }, JSON.stringify({
-      name: 'Temp Route', subpath: '/tmp', target: `http://127.0.0.1:${fixturePort}`, enabled: true, order: 9, publicVisible: false,
+      name: 'Temp Route', subpath: '/tmp', target: `http://127.0.0.1:${fixturePort}`, enabled: true, order: 9,
       options: { rewriteCookie: true, autoSlash: false, legacyJunk: 'drop-me', signaturePaths: ['/legacy'] }
     }));
     const createdRoute = JSON.parse(created.text).route;
     check('新增路由选项被归一化落盘', createdRoute.options.rewriteCookie === true && createdRoute.options.autoSlash === false && createdRoute.options.legacyJunk === undefined);
     check('签名/漂移路径列表落盘', Array.isArray(createdRoute.options.signaturePaths) && createdRoute.options.signaturePaths[0] === '/legacy');
-    check('未登录可见开关落盘', createdRoute.publicVisible === false);
+    check('新路由默认未登录隐藏', createdRoute.publicVisible === false);
 
     res = await get('/__gw/api/public/info');
     check('未登录首页隐藏私有项目', !JSON.parse(res.text).routes.some((r) => r.subpath === '/tmp'));
     check('公开清单禁止缓存', res.headers['cache-control'] === 'no-store', String(res.headers['cache-control']));
+
+    const shown = await request({ port: gwPort, path: `/__gw/api/admin/routes/${createdRoute.id}/visibility`, method: 'POST', headers: authHeaders });
+    check('操作栏切换为公开', JSON.parse(shown.text).publicVisible === true);
+    res = await get('/__gw/api/public/info');
+    check('切换公开后出现在首页', JSON.parse(res.text).routes.some((r) => r.subpath === '/tmp'));
+    const hiddenAgain = await request({ port: gwPort, path: `/__gw/api/admin/routes/${createdRoute.id}/visibility`, method: 'POST', headers: authHeaders });
+    check('操作栏再次切换为隐藏', JSON.parse(hiddenAgain.text).publicVisible === false);
+    res = await get('/__gw/api/public/info');
+    check('再次隐藏后从首页移除', !JSON.parse(res.text).routes.some((r) => r.subpath === '/tmp'));
 
     res = await get('/tmp');
     check('新增路由热生效且 autoSlash=false 不跳转', res.status === 200, `${res.status} ${res.headers.location}`);

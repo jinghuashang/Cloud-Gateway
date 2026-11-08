@@ -740,7 +740,7 @@ apiRouter.post('/admin/routes', authMiddleware, (req, res) => {
     subpath: cleanSub,
     target: targetCheck.target,
     enabled: enabled !== false,
-    publicVisible: publicVisible !== false,
+    publicVisible: publicVisible === true,
     order: Number(order) || (config.routes.length + 1),
     options: sanitizeOptionsInput(options, {
       autoSlash: true,
@@ -821,6 +821,17 @@ apiRouter.post('/admin/routes/:id/toggle', authMiddleware, (req, res) => {
   r.enabled = !r.enabled;
   saveConfig(config);
   res.json({ success: true, enabled: r.enabled });
+});
+
+// 8.1 管理接口：切换“未登录首页可见”
+apiRouter.post('/admin/routes/:id/visibility', authMiddleware, (req, res) => {
+  const { id } = req.params;
+  const r = config.routes.find((x) => x.id === id);
+  if (!r) return res.status(404).json({ error: '路由不存在' });
+  // 历史未写该字段的路由视为可见；显式落盘后按布尔值判断。
+  r.publicVisible = r.publicVisible === false;
+  saveConfig(config);
+  res.json({ success: true, publicVisible: r.publicVisible });
 });
 
 // 9. 管理接口：修改站点全局配置与密码

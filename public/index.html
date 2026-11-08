@@ -2072,11 +2072,18 @@
               ${r.enabled ? '● 运行中' : '○ 已停用'}
             </button>
           </td>
-          <td class="py-3 px-6 text-right space-x-2">
-            <a href="${escapeHtml(r.subpath)}/" target="_blank" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa] inline-block"><i data-lucide="external-link" class="w-3.5 h-3.5"></i></a>
-            <button onclick="openDoctorModal(${idx})" class="p-1 text-zinc-400 hover:text-emerald-600" title="诊断"><i data-lucide="activity" class="w-3.5 h-3.5"></i></button>
-            <button onclick="openRouteEditModal('${r.id}')" class="p-1 text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa]"><i data-lucide="edit" class="w-3.5 h-3.5"></i></button>
-            <button onclick="deleteRoute('${r.id}')" class="p-1 text-zinc-400 hover:text-rose-600"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+          <td class="py-3 px-6">
+            <div class="flex items-center justify-end gap-1.5">
+              <button onclick="toggleRouteVisibility('${r.id}')" title="切换未登录首页可见性" class="inline-flex h-7 min-w-[3rem] items-center justify-center rounded-md border px-1.5 text-[10px] font-medium transition-colors ${
+                r.publicVisible === false
+                  ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+              }">${r.publicVisible === false ? '隐藏' : '公开'}</button>
+              <a href="${escapeHtml(r.subpath)}/" target="_blank" title="访问" class="inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa] transition-colors"><i data-lucide="external-link" class="w-3.5 h-3.5"></i></a>
+              <button onclick="openDoctorModal(${idx})" title="诊断" class="inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:text-emerald-600 transition-colors"><i data-lucide="activity" class="w-3.5 h-3.5"></i></button>
+              <button onclick="openRouteEditModal('${r.id}')" title="编辑" class="inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:text-[#09090b] dark:hover:text-[#fafafa] transition-colors"><i data-lucide="edit" class="w-3.5 h-3.5"></i></button>
+              <button onclick="deleteRoute('${r.id}')" title="删除" class="inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:text-rose-600 transition-colors"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+            </div>
           </td>
         </tr>
       `).join('');
@@ -2107,6 +2114,10 @@
           ${profileBadge(r.subpath) ? `<div class="text-[10px] font-mono text-[#a1a1aa] dark:text-[#71717a]">${escapeHtml(profileBadge(r.subpath))}</div>` : ''}
 
           <div class="pt-2 border-t border-zinc-200/50 dark:border-zinc-800 flex items-center justify-end gap-3 text-xs">
+            <button onclick="toggleRouteVisibility('${r.id}')" class="inline-flex items-center gap-1 font-medium ${r.publicVisible === false ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}">
+              <i data-lucide="${r.publicVisible === false ? 'eye-off' : 'eye'}" class="w-3.5 h-3.5"></i>
+              <span>${r.publicVisible === false ? '隐藏' : '公开'}</span>
+            </button>
             <a href="${escapeHtml(r.subpath)}/" target="_blank" class="inline-flex items-center gap-1 text-[#09090b] dark:text-[#fafafa] font-medium">
               <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
               <span>访问</span>
@@ -2136,6 +2147,21 @@
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       fetchAdminRoutes();
+    }
+
+    async function toggleRouteVisibility(id) {
+      const res = await fetch(`/__gw/api/admin/routes/${id}/visibility`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (!res.ok) {
+        showToast('切换可见性失败', 'error');
+        return;
+      }
+      const data = await res.json();
+      showToast(data.publicVisible ? '已设为未登录可见' : '已设为未登录隐藏', 'success');
+      await fetchAdminRoutes();
+      fetchPublicInfo();
     }
 
     async function deleteRoute(id) {
@@ -2198,7 +2224,7 @@
         document.getElementById('formIcon').value = 'globe';
         document.getElementById('formOrder').value = adminRoutes.length + 1;
         document.getElementById('formDescription').value = '';
-        document.getElementById('formPublicVisible').checked = true;
+        document.getElementById('formPublicVisible').checked = false;
         document.getElementById('formAutoPrefixSubpath').checked = true;
         document.getElementById('formRewriteLocation').checked = true;
         document.getElementById('formRewriteHtml').checked = true;

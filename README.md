@@ -146,7 +146,7 @@
 
 | 字段 | 类型 | 默认值 | 作用说明 |
 | :--- | :--- | :--- | :--- |
-| `publicVisible` | `boolean` | `true` | **未登录首页可见**：关闭后该项目不会出现在 `/__gw/api/public/info` 与匿名首页，只有管理员登录后才会合并显示。该开关只控制首页展示，**不构成访问控制**：知道子路径的访客仍可直接访问被代理应用。 |
+| `publicVisible` | `boolean` | `false` | **未登录首页可见**：新建路由默认隐藏，不会出现在 `/__gw/api/public/info` 与匿名首页；只有管理员登录后才会合并显示。历史配置未写该字段时仍按可见处理。该开关只控制首页展示，**不构成访问控制**：知道子路径的访客仍可直接访问被代理应用。 |
 
 ### 🎛️ 高级代理开关解析 (`options`)
 
@@ -263,7 +263,7 @@ Service Worker 修复上线后，旧根注册需在浏览器检查 `/sw.js` 更�
 - **密钥强随机且持久化**：`jwtSecret` 使用 `crypto.randomBytes(48)` 生成并立即落盘；改密/登出通过 `tokenVersion` 吊销全部旧令牌（`POST /__gw/api/auth/logout`）。
 - **登录限速**：同一来源 60 秒内 5 次失败后返回 `429`；口令比较使用异步 bcrypt（cost 12），不再阻塞事件循环。
 - **输入校验**：子路径仅允许 `[A-Za-z0-9._~-]` 与 `/`（拒绝引号/尖括号/点段/编码字符）；分类、画像、签名/漂移路径、自定义镜像、上游地址全部白名单校验；门户所有动态字段统一转义，并下发 CSP（`script-src 'self' 'unsafe-inline'` + 两个 CDN 白名单）。
-- **首页可见性**：`publicVisible: false` 的项目只对已登录管理员展示；匿名访问 `/__gw/api/public/info` 不会拿到其名称、描述与子路径。该配置不拦截对子路径本身的直接访问，需要真正访问控制时请在上游应用或前置反代中实现。
+- **首页可见性**：新建路由默认 `publicVisible: false`，只对已登录管理员展示；匿名访问 `/__gw/api/public/info` 不会拿到其名称、描述与子路径。管理端操作栏可一键切换公开/隐藏。该配置不拦截对子路径本身的直接访问，需要真正访问控制时请在上游应用或前置反代中实现。
 - **代理层加固**：默认只信任 TCP 对端 IP（需显式 `GW_TRUST_PROXY_HEADERS=true` 才采信 PROXY 头/XFF/X-Real-IP）；客户端 `X-Original-URI`/`X-Authenticated-User`/XFF 链在转发前清除；`Origin`/`Sec-Fetch-Site` 默认保留（不替上游绕过 CSRF 校验）；上游 HTTPS 默认校验证书（自签用 `insecureTLS: true`）；点段/编码斜杠路径直接 `400`。
 - **会话胶囊**：改为网关签发的随机设备令牌（`__gw_capsule_id`，HttpOnly、10 分钟 TTL），不再以可伪造 IP 为键。
 - **缓存与压缩**：带 `Set-Cookie` 的响应强制 `private, no-store`；解压设置 `maxOutputLength`，防止压缩炸弹；网关自用 Cookie 与上游 `Set-Cookie` 合并下发，不再互相覆盖。
