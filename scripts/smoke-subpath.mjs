@@ -558,6 +558,17 @@ async function main() {
     }, {});
     check('健康检查：可达上游为在线', healthBySub['/app'] && healthBySub['/app'].online === true, JSON.stringify(healthBySub['/app']));
     check('健康检查：不可达上游为离线', healthBySub['/dead'] && healthBySub['/dead'].online === false, JSON.stringify(healthBySub['/dead']));
+
+    const trafficFetch = async () => {
+      const res = await request({ port: gwPort, path: '/__gw/api/admin/routes/traffic', headers: authHeaders });
+      return JSON.parse(res.text).routes.find((r) => r.subpath === '/app') || { requests: 0, inBytes: 0, outBytes: 0 };
+    };
+    const trafficBefore = await trafficFetch();
+    check('按路由统计：请求数与下行字节', trafficBefore.requests > 0 && trafficBefore.outBytes > 0, JSON.stringify(trafficBefore));
+    const uploadBody = JSON.stringify({ pad: 'x'.repeat(512) });
+    await request({ port: gwPort, path: '/app/echo-headers', method: 'POST', headers: { 'content-type': 'application/json' } }, uploadBody);
+    const trafficAfter = await trafficFetch();
+    check('按路由统计：上行字节', trafficAfter.inBytes >= trafficBefore.inBytes + uploadBody.length, `${trafficBefore.inBytes} -> ${trafficAfter.inBytes}`);
     const created = await request({ port: gwPort, path: '/__gw/api/admin/routes', method: 'POST', headers: authHeaders }, JSON.stringify({
       name: 'Temp Route', subpath: '/tmp', target: `http://127.0.0.1:${fixturePort}`, enabled: true, order: 9,
       options: { rewriteCookie: true, autoSlash: false, legacyJunk: 'drop-me', signaturePaths: ['/legacy'] }

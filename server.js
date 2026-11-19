@@ -351,6 +351,83 @@ function getTrafficStats() {
   };
 }
 
+// ======================= 按路由流量统计（字节） =======================
+const ROUTE_TRAFFIC_FILE = path.join(DATA_DIR, 'traffic.json');
+const routeTraffic = new Map(); // subpath -> { requests, inBytes, outBytes, lastAt }
+let routeTrafficSince = new Date().toISOString();
+let routeTrafficDirty = false;
+
+function loadRouteTraffic() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(ROUTE_TRAFFIC_FILE, 'utf8'));
+    if (raw.since) routeTrafficSince = String(raw.since);
+    for (const [subpath, item] of Object.entries(raw.routes || {})) {
+      if (!item || typeof item !== 'object') continue;
+      routeTraffic.set(subpath, {
+        requests: Number(item.requests) || 0,
+        inBytes: Number(item.inBytes) || 0,
+        outBytes: Number(item.outBytes) || 0,
+        lastAt: item.lastAt || null
+      });
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.error('[Traffic] 读取按路由统计失败:', err.message);
+  }
+}
+
+function persistRouteTraffic() {
+  if (!routeTrafficDirty) return;
+  routeTrafficDirty = false;
+  try {
+    const payload = {
+      version: 1,
+      since: routeTrafficSince,
+      updatedAt: new Date().toISOString(),
+      routes: Object.fromEntries(routeTraffic)
+    };
+    const tmp = ROUTE_TRAFFIC_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, ROUTE_TRAFFIC_FILE);
+  } catch (err) {
+    console.error('[Traffic] 写入按路由统计失败:', err.message);
+  }
+}
+
+function recordRouteTraffic(subpath, inBytes, outBytes) {
+  if (!subpath) return;
+  const item = routeTraffic.get(subpath) || { requests: 0, inBytes: 0, outBytes: 0, lastAt: null };
+  item.requests += 1;
+  item.inBytes += Math.max(0, Number(inBytes) || 0);
+  item.outBytes += Math.max(0, Number(outBytes) || 0);
+  item.lastAt = new Date().toISOString();
+  routeTraffic.set(subpath, item);
+  routeTrafficDirty = true;
+}
+
+function describeRouteTraffic() {
+  return [...(config.routes || [])]
+    .sort((a, b) => (a.order || 99) - (b.order || 99))
+    .map((r) => {
+      const subpath = sanitizeSubpath(r.subpath);
+      const item = routeTraffic.get(subpath) || { requests: 0, inBytes: 0, outBytes: 0, lastAt: null };
+      return {
+        id: r.id,
+        name: r.name,
+        subpath,
+        enabled: r.enabled !== false,
+        requests: item.requests,
+        inBytes: item.inBytes,
+        outBytes: item.outBytes,
+        totalBytes: item.inBytes + item.outBytes,
+        lastAt: item.lastAt
+      };
+    });
+}
+
+loadRouteTraffic();
+setInterval(persistRouteTraffic, 10000).unref();
+process.on('exit', persistRouteTraffic);
+
 // ======================= 二级目录反代引擎接线 =======================
 // 反代核心能力已拆分到独立模块，便于维护与复用：
 //   lib/proxy-engine.js  路由画像、自学习签名路由、归属判定、代理中间件、WebSocket 升级
@@ -374,18 +451,39 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', TRUST_PROXY_HEADERS);
 
-// 全局请求访问日志
+// 全局请求访问日志 + 按路由字节统计（仅 HTTP；WebSocket 升级不计入）
 app.use((req, res, next) => {
   const start = Date.now();
   const realIp = getClientRealIp(req);
   const proto = req.socket.encrypted ? 'HTTPS' : 'HTTP';
+  const bytesReadAtStart = req.socket ? req.socket.bytesRead : 0;
+  const bytesWrittenAtStart = req.socket ? req.socket.bytesWritten : 0;
+  let recorded = false;
+  const recordRoute = () => {
+    if (recorded) return;
+    recorded = true;
+    const routeSubpath = res.locals && res.locals.__gwRouteSubpath;
+    if (!routeSubpath || !req.socket) return;
+    const measuredIn = res.locals && res.locals.__gwRouteInBytes;
+    const inBytes = measuredIn !== undefined ? measuredIn : (req.socket.bytesRead - bytesReadAtStart);
+    recordRouteTraffic(
+      routeSubpath,
+      inBytes,
+      req.socket.bytesWritten - bytesWrittenAtStart
+    );
+  };
   const originalEnd = res.end;
   res.end = function(...args) {
     const duration = Date.now() - start;
     const ref = req.headers['referer'] ? ` (ref: ${req.headers['referer'].replace(/^https?:\/\/[^\/]+/, '')})` : '';
     console.log(`[REQ] [${proto}] [IP: ${realIp}] ${req.method} ${req.originalUrl || req.url}${ref} -> ${res.statusCode} [${duration}ms]`);
-    return originalEnd.apply(this, args);
+    try {
+      return originalEnd.apply(this, args);
+    } finally {
+      recordRoute();
+    }
   };
+  res.on('close', recordRoute);
   next();
 });
 
@@ -962,6 +1060,19 @@ function probeUpstream(target, insecureTLS, timeoutMs = 2000) {
     }
   });
 }
+
+apiRouter.get('/admin/routes/traffic', authMiddleware, (req, res) => {
+  const routes = describeRouteTraffic();
+  const totals = routes.reduce((acc, item) => {
+    acc.requests += item.requests;
+    acc.inBytes += item.inBytes;
+    acc.outBytes += item.outBytes;
+    acc.totalBytes += item.totalBytes;
+    return acc;
+  }, { requests: 0, inBytes: 0, outBytes: 0, totalBytes: 0 });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ since: routeTrafficSince, updatedAt: new Date().toISOString(), totals, routes });
+});
 
 apiRouter.get('/admin/routes/health', authMiddleware, async (req, res) => {
   const routes = (config.routes || []).filter((r) => r.enabled !== false);

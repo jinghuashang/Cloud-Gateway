@@ -59,8 +59,11 @@
   - 技术栈嗅探（Next.js / RSC / Vite / webpack / React Router / Vue Router / Socket.IO / Service Worker / SvelteKit / Nuxt）并给出中文可执行建议。
 - 🚦 **控制台三态状态灯**
   - **在线**显示绿色、**离线**显示红色、**已关闭**显示黑色；打开控制台时并发探测已启用路由的上游，接口为 `GET /__gw/api/admin/routes/health`。
+- 📈 **按路由流量统计**
+  - 记录每个挂载点的请求数、上行与下行字节（含响应头），每 10 秒写入 `data/traffic.json`，重启后继续累计；
+  - 控制台「流量」列展示 `↑ 上行 / ↓ 下行 / 请求次数`，接口为 `GET /__gw/api/admin/routes/traffic`；WebSocket 升级流量暂不计入。
 - 🧪 **可回归的冒烟测试**
-  - `node scripts/smoke-subpath.mjs` 自带上游夹具与临时配置，逐项校验重写契约及 Worker 安装隔离边界（173 项断言），重构反代引擎时可放心回归。
+  - `node scripts/smoke-subpath.mjs` 自带上游夹具与临时配置，逐项校验重写契约及 Worker 安装隔离边界（175 项断言），重构反代引擎时可放心回归。
 
 ---
 

@@ -437,6 +437,7 @@
                 <th class="py-3 px-6 font-medium">服务名称</th>
                 <th class="py-3 px-4 font-medium">二级目录 (Subpath)</th>
                 <th class="py-3 px-4 font-medium">目标后端 (Target)</th>
+                <th class="py-3 px-4 font-medium">流量</th>
                 <th class="py-3 px-4 font-medium text-center">状态</th>
                 <th class="py-3 px-6 font-medium text-right">操作</th>
               </tr>
@@ -967,6 +968,7 @@
     let adminProfiles = null;
     let runtimeState = {};
     let routeHealth = {};
+    let routeTrafficData = {};
     let currentCategory = '全部';
     let searchQuery = '';
     let authToken = localStorage.getItem('cloud_gateway_token') || '';
@@ -1684,6 +1686,7 @@
         }
         renderAdminUI();
         fetchRouteHealth();
+        fetchRouteTraffic();
       } catch (err) {
         console.error('Failed to fetch routes:', err);
       }
@@ -2069,6 +2072,37 @@
       return parts.join(' · ');
     }
 
+    async function fetchRouteTraffic() {
+      try {
+        const res = await fetch('/__gw/api/admin/routes/traffic', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        routeTrafficData = {};
+        for (const item of data.routes || []) routeTrafficData[item.id] = item;
+        if (!document.getElementById('adminPanel').classList.contains('hidden')) {
+          renderAdminUI();
+        }
+      } catch (err) {
+        console.error('Failed to fetch route traffic:', err);
+      }
+    }
+
+    function formatBytes(value) {
+      const num = Number(value) || 0;
+      if (num < 1024) return `${num} B`;
+      const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+      let size = num / 1024;
+      let index = 0;
+      while (size >= 1024 && index < units.length - 1) {
+        size /= 1024;
+        index++;
+      }
+      const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+      return `${size.toFixed(digits)} ${units[index]}`;
+    }
+
     function routeStatusMeta(r) {
       if (!r.enabled) {
         return {
@@ -2108,6 +2142,7 @@
       const tbody = document.getElementById('adminTableBody');
       tbody.innerHTML = adminRoutes.map((r, idx) => {
         const status = routeStatusMeta(r);
+        const traffic = routeTrafficData[r.id] || { requests: 0, inBytes: 0, outBytes: 0 };
         return `
         <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-850/50 transition-colors">
           <td class="py-3 px-6 font-medium text-[#09090b] dark:text-[#fafafa]">
@@ -2122,6 +2157,11 @@
           </td>
           <td class="py-3 px-4 font-mono font-medium text-[#09090b] dark:text-[#fafafa]">${escapeHtml(r.subpath)}/</td>
           <td class="py-3 px-4 font-mono text-[#71717a] dark:text-[#a1a1aa]">${escapeHtml(r.target)}</td>
+          <td class="py-3 px-4 font-mono text-[10px] text-[#71717a] dark:text-[#a1a1aa] whitespace-nowrap leading-tight">
+            <div title="上行流量">↑ ${formatBytes(traffic.inBytes)}</div>
+            <div title="下行流量">↓ ${formatBytes(traffic.outBytes)}</div>
+            <div class="text-[9px] opacity-70">${traffic.requests} 次</div>
+          </td>
           <td class="py-3 px-4 text-center">
             <button onclick="toggleRouteStatus('${r.id}')" title="${status.title}" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${status.cls}">
               <span class="w-1.5 h-1.5 rounded-full ${status.dot}"></span>
@@ -2149,6 +2189,7 @@
       const mobileList = document.getElementById('adminMobileList');
       mobileList.innerHTML = adminRoutes.map((r, idx) => {
         const status = routeStatusMeta(r);
+        const traffic = routeTrafficData[r.id] || { requests: 0, inBytes: 0, outBytes: 0 };
         return `
         <div class="p-3.5 rounded-xl bg-zinc-50/60 dark:bg-zinc-800/60/60 border border-zinc-200/60 dark:border-zinc-800 space-y-2.5">
           <div class="flex items-center justify-between gap-2">
@@ -2168,6 +2209,11 @@
           <div class="flex items-center justify-between text-xs font-mono text-[11px] gap-2">
             <span class="px-1.5 py-0.5 rounded bg-zinc-200/80 dark:bg-zinc-800 text-[#09090b] dark:text-[#fafafa] font-bold">${escapeHtml(r.subpath)}/</span>
             <span class="text-[#71717a] dark:text-[#a1a1aa] truncate">${escapeHtml(r.target)}</span>
+          </div>
+          <div class="flex items-center gap-3 text-[10px] font-mono text-[#71717a] dark:text-[#a1a1aa]">
+            <span>↑ ${formatBytes(traffic.inBytes)}</span>
+            <span>↓ ${formatBytes(traffic.outBytes)}</span>
+            <span class="opacity-70">${traffic.requests} 次</span>
           </div>
           ${profileBadge(r.subpath) ? `<div class="text-[10px] font-mono text-[#a1a1aa] dark:text-[#71717a]">${escapeHtml(profileBadge(r.subpath))}</div>` : ''}
 

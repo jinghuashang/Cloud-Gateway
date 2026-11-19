@@ -19,6 +19,7 @@ ssl/*.pfx
 
 # Data directory (preserve example config template only)
 data/config.json
+data/traffic.json
 data/*.bak*
 !data/config.example.json
 !data/.gitkeep
