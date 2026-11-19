@@ -4,8 +4,10 @@ WORKDIR /app
 
 COPY package*.json ./
 
+# 可通过 --build-arg NPM_REGISTRY=https://registry.npmmirror.com 指定构建期依赖源
+ARG NPM_REGISTRY=https://registry.npmjs.org
 # 使用锁文件安装，保证依赖版本可复现
-RUN npm ci --omit=dev --no-audit --no-fund
+RUN npm ci --omit=dev --no-audit --no-fund --registry="${NPM_REGISTRY}" --replace-registry-host=always
 
 COPY server.js ./
 COPY lib/ ./lib/
